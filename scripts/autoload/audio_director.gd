@@ -10,6 +10,7 @@ var _combat := false
 var _danger := false
 var _boss_on := false
 var _started := false
+var _biome := 0
 
 
 func _ready() -> void:
@@ -33,10 +34,16 @@ func start() -> void:
 	_sfx["slip"] = _noise(220, 0.46, 6.0)
 	_sfx["hit"] = _noise(90, 0.4, 16.0)
 	_sfx["kill"] = _tone(180.0, 120, 0.3, 8.0)
-	_sfx["balance"] = _arpeggio()
+	_sfx["balance"] = _arpeggio([523.0, 659.0, 784.0])
+	_sfx["balance3"] = _arpeggio([659.0, 784.0, 1046.0])
 	_sfx["danger"] = _tone(90.0, 180, 0.28, 6.0)
 	_sfx["fall"] = _noise(420, 0.55, 4.0)
 	_sfx["freeze"] = _tone(520.0, 220, 0.25, 4.0)
+	_sfx["stinger_wave"] = _tone(392.0, 160, 0.3, 6.0)
+	_sfx["stinger_wind"] = _glide(240.0, 120.0, 220, 0.22)
+	_sfx["stinger_win"] = _arpeggio([523.0, 659.0, 784.0, 1046.0])
+	_sfx["stinger_coin"] = _tone(988.0, 90, 0.28, 10.0)
+	_sfx["chest"] = _arpeggio([440.0, 554.0, 659.0])
 	for i in 10:
 		var player := AudioStreamPlayer.new()
 		player.bus = "Master"
@@ -76,32 +83,33 @@ func _sync_music() -> void:
 func _apply_layers() -> void:
 	if _music == null or _drive == null or _high == null:
 		return
-	if not GameState.music_on:
+	if not GameState.music_on or GameState.music_volume <= 0.01:
 		_music.stop()
 		_drive.stop()
 		_high.stop()
 		return
 	if not _music.playing:
 		_music.play()
-	_music.volume_db = -16.0
+	var trim := linear_to_db(clampf(GameState.music_volume, 0.001, 1.0))
+	_music.volume_db = -16.0 + trim
 	var paused := get_tree() != null and get_tree().paused
 	var drive_on := _combat and not paused
 	if drive_on:
 		if not _drive.playing:
 			_drive.play()
-		_drive.volume_db = -12.0
+		_drive.volume_db = -12.0 + trim
 	else:
 		_drive.volume_db = -80.0
 	if _danger and not paused:
 		if not _high.playing:
 			_high.play()
-		_high.volume_db = -10.0
+		_high.volume_db = -10.0 + trim
 	elif _boss_on and not paused:
 		if not _high.playing:
 			_high.play()
-		_high.volume_db = -11.0
+		_high.volume_db = -11.0 + trim
 		if drive_on:
-			_drive.volume_db = -8.0
+			_drive.volume_db = -8.0 + trim
 	else:
 		_high.volume_db = -80.0
 
@@ -122,6 +130,9 @@ func play(name: String) -> void:
 	var player := _players[_cursor]
 	_cursor = (_cursor + 1) % _players.size()
 	player.stream = _sfx[name]
+	player.volume_db = linear_to_db(clampf(GameState.sfx_volume, 0.001, 1.0))
+	if GameState.sfx_volume <= 0.01:
+		return
 	player.play()
 
 
@@ -172,18 +183,36 @@ func _glide(a: float, b: float, ms: int, volume: float) -> AudioStreamWAV:
 	return _wav(data, rate, false)
 
 
-func _arpeggio() -> AudioStreamWAV:
+func downbeat() -> void:
+	if _drive != null and GameState.music_on and GameState.music_volume > 0.01:
+		_drive.play()
+
+
+func set_biome(index: int) -> void:
+	if index == _biome:
+		return
+	_biome = index
+	if _music == null:
+		return
+	_music.stream = _phrase("pad")
+	_drive.stream = _phrase("drive")
+	_high.stream = _phrase("danger")
+	if GameState.music_on:
+		_music.play()
+
+
+func _arpeggio(notes: Array = []) -> AudioStreamWAV:
 	var rate := 22050
-	var n := int(rate * 0.42)
+	var chord: Array = notes if notes.size() > 0 else [523.0, 659.0, 784.0]
+	var n := int(rate * 0.12 * chord.size())
 	var data := PackedByteArray()
 	data.resize(n * 2)
-	var notes := [523.0, 659.0, 784.0]
 	for i in n:
 		var t := float(i) / float(rate)
-		var step := clampi(int(t / 0.12), 0, 2)
+		var step := clampi(int(t / 0.12), 0, chord.size() - 1)
 		var local := t - float(step) * 0.12
 		var env := exp(-local * 10.0)
-		var s := sin(TAU * notes[step] * t) * env * 0.35
+		var s := sin(TAU * float(chord[step]) * t) * env * 0.35
 		data.encode_s16(i * 2, int(clampf(s, -1.0, 1.0) * 32767.0))
 	return _wav(data, rate, false)
 
@@ -226,17 +255,24 @@ func _phrase(kind: String) -> AudioStreamWAV:
 	data.resize(n * 2)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 11 if kind == "drive" else 4
-	var melody: Array[float] = [329.63, 392.0, 440.0, 493.88, 587.33, 493.88, 440.0, 392.0]
+	var melody: Array[float] = [220.0, 261.63, 329.63, 349.23, 392.0, 440.0, 392.0, 329.63]
+	var bass := 110.0
+	if _biome == 1:
+		melody = [293.66, 329.63, 349.23, 392.0, 440.0, 493.88, 440.0, 392.0]
+		bass = 146.83
+	elif _biome == 2:
+		melody = [329.63, 349.23, 392.0, 440.0, 493.88, 523.25, 493.88, 440.0]
+		bass = 164.81
 	if kind == "danger":
-		melody = [329.63, 349.23, 440.0, 466.16, 349.23, 329.63, 311.13, 349.23]
+		melody = [349.23, 329.63, 311.13, 293.66, 329.63, 349.23, 392.0, 349.23]
 	for i in n:
 		var t := float(i) / float(rate)
 		var bar := int(t / (beat * 4.0)) % 8
 		var beat_pos := fmod(t, beat)
 		var s := 0.0
 		if kind == "pad":
-			var bass := 82.41 if bar % 2 == 0 else 123.47
-			s = sin(TAU * bass * t) * 0.24 + sin(TAU * bass * 1.5 * t) * 0.08
+			var root := bass if bar % 2 == 0 else bass * 1.5
+			s = sin(TAU * root * t) * 0.24 + sin(TAU * root * 1.5 * t) * 0.08
 		elif kind == "drive":
 			var step := int(t / beat)
 			var kick := 1.0 if beat_pos < 0.07 and step % 2 == 0 else 0.0

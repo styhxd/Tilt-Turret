@@ -21,6 +21,14 @@ var plant_splash: bool = false
 var plant_air: bool = false
 var plant_bounce: bool = false
 var heat: bool = false
+var pact_shell: bool = false
+var pact_gust: bool = false
+var pact_noglue: bool = false
+var sfx_volume: float = 1.0
+var music_volume: float = 1.0
+var seen_ids: String = ""
+var daily_pact: String = ""
+var daily_pact_day: String = ""
 var toy_ghost: bool = false
 var toy_base_gen: bool = false
 var toy_relic: bool = false
@@ -51,8 +59,76 @@ func upgrade_level(stat: String) -> int:
 	return 0
 
 
-func multiplier(stat: String) -> float:
-	return 1.0 + 0.05 * float(upgrade_level(stat))
+func multiplier(_stat: String) -> float:
+	return 1.0
+
+
+func upgrade_blurb(stat: String) -> String:
+	var level := upgrade_level(stat)
+	var mark := 3
+	if level >= 3:
+		mark = 6
+	if level >= 6:
+		mark = 10
+	return text("%s_%d" % [stat, mark])
+
+
+func coin_heat() -> bool:
+	return pact_shell and pact_gust and pact_noglue
+
+
+func toggle_pact(which: String) -> void:
+	match which:
+		"shell":
+			pact_shell = not pact_shell
+		"gust":
+			pact_gust = not pact_gust
+		"glue":
+			pact_noglue = not pact_noglue
+	heat = coin_heat()
+	save_game()
+
+
+func set_sfx_volume(value: float) -> void:
+	sfx_volume = clampf(value, 0.0, 1.0)
+	save_game()
+
+
+func set_music_volume(value: float) -> void:
+	music_volume = clampf(value, 0.0, 1.0)
+	save_game()
+
+
+func has_seen(id: String) -> bool:
+	return id in seen_ids.split(",", false)
+
+
+func mark_seen(id: String) -> void:
+	if id == "" or has_seen(id):
+		return
+	seen_ids = id if seen_ids == "" else seen_ids + "," + id
+	save_game()
+
+
+func ensure_daily_pact() -> void:
+	var today := Time.get_date_string_from_system()
+	if daily_pact_day == today and daily_pact != "":
+		return
+	var opts := ["shell", "gust", "glue"]
+	daily_pact = opts[absi(today.hash()) % opts.size()]
+	daily_pact_day = today
+	save_game()
+
+
+func daily_matches() -> bool:
+	match daily_pact:
+		"shell":
+			return pact_shell
+		"gust":
+			return pact_gust
+		"glue":
+			return pact_noglue
+	return false
 
 
 func upgrade_cost(level: int) -> int:
@@ -170,6 +246,9 @@ func _spent(level: int) -> int:
 
 func set_heat(on: bool) -> void:
 	heat = on
+	pact_shell = on
+	pact_gust = on
+	pact_noglue = on
 	save_game()
 
 
@@ -252,6 +331,16 @@ func load_game() -> void:
 	plant_air = bool(cf.get_value("p", "plant_air", false))
 	plant_bounce = bool(cf.get_value("p", "plant_bounce", false))
 	heat = bool(cf.get_value("p", "heat", false))
+	var legacy_heat := heat
+	pact_shell = bool(cf.get_value("p", "pact_shell", legacy_heat))
+	pact_gust = bool(cf.get_value("p", "pact_gust", legacy_heat))
+	pact_noglue = bool(cf.get_value("p", "pact_noglue", legacy_heat))
+	heat = pact_shell and pact_gust and pact_noglue
+	sfx_volume = float(cf.get_value("p", "sfx_volume", 1.0))
+	music_volume = float(cf.get_value("p", "music_volume", 1.0))
+	seen_ids = str(cf.get_value("p", "seen_ids", ""))
+	daily_pact = str(cf.get_value("p", "daily_pact", ""))
+	daily_pact_day = str(cf.get_value("p", "daily_pact_day", ""))
 	toy_ghost = bool(cf.get_value("p", "toy_ghost", false))
 	toy_base_gen = bool(cf.get_value("p", "toy_base_gen", false))
 	toy_relic = bool(cf.get_value("p", "toy_relic", false))
@@ -281,6 +370,14 @@ func save_game() -> void:
 	cf.set_value("p", "plant_air", plant_air)
 	cf.set_value("p", "plant_bounce", plant_bounce)
 	cf.set_value("p", "heat", heat)
+	cf.set_value("p", "pact_shell", pact_shell)
+	cf.set_value("p", "pact_gust", pact_gust)
+	cf.set_value("p", "pact_noglue", pact_noglue)
+	cf.set_value("p", "sfx_volume", sfx_volume)
+	cf.set_value("p", "music_volume", music_volume)
+	cf.set_value("p", "seen_ids", seen_ids)
+	cf.set_value("p", "daily_pact", daily_pact)
+	cf.set_value("p", "daily_pact_day", daily_pact_day)
 	cf.set_value("p", "toy_ghost", toy_ghost)
 	cf.set_value("p", "toy_base_gen", toy_base_gen)
 	cf.set_value("p", "toy_relic", toy_relic)

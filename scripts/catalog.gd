@@ -3,6 +3,7 @@ class_name Catalog
 static var _modules: Dictionary = {}
 static var _creatures: Dictionary = {}
 static var _waves: Array = []
+static var _dusk: Array = []
 static var _ready := false
 
 const DROP_IDS: Array[String] = [
@@ -28,6 +29,7 @@ static func ensure() -> void:
 	_modules = _load_map("res://data/modules.json")
 	_creatures = _load_map("res://data/creatures.json")
 	_waves = _load_list("res://data/waves.json")
+	_dusk = _load_list("res://data/waves_dusk.json")
 	_ready = true
 
 
@@ -78,12 +80,21 @@ static func creature(id: String) -> Dictionary:
 	return _creatures.get(id, {})
 
 
-static func wave_script(wave: int) -> Dictionary:
+static func wave_script(wave: int, chapter: String = "meadow") -> Dictionary:
 	ensure()
-	for item in _waves:
+	var list := _dusk if chapter == "dusk" else _waves
+	for item in list:
 		if int(item.get("wave", -1)) == wave:
 			return item
 	return {}
+
+
+static func counter_key(id: String) -> String:
+	return str(COUNTER.get(id, "vs_line"))
+
+
+static func creature_counter(id: String) -> String:
+	return str(CREATURE_COUNTER.get(id, "vs_swarm"))
 
 
 static func com_of(item: Dictionary) -> Vector3:
@@ -128,3 +139,24 @@ const ENERGY_COST := {
 const RELICS: Array[String] = [
 	"long_line", "alchemist", "crown_mark", "magnet", "thirsty", "reflect",
 ]
+
+const COUNTER := {
+	"02_side_cannon": "vs_slug",
+	"03_twin_guns": "vs_air",
+	"04_generator": "vs_line",
+	"05_kaiju_bust": "vs_shove",
+	"06_shield_slab": "vs_shove",
+	"07_spike_drum": "vs_swarm",
+	"08_missile_rack": "vs_armor",
+	"09_crystal_spur": "vs_high",
+	"10_crown_nest": "vs_air",
+}
+
+const CREATURE_COUNTER := {
+	"01_ram_beetle": "vs_swarm",
+	"02_smash_crab": "vs_armor",
+	"03_iron_slug": "vs_slug",
+	"04_manta_bat": "vs_air",
+	"05_sting_wasp": "vs_air",
+	"06_bloated_tick": "vs_bomb",
+}

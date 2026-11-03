@@ -73,3 +73,20 @@ Costas: Generate a new image of the exact same object as the first image in this
 Direita: Generate a new image of the exact same object as the first image in this chat. Do not redesign anything. Camera only: orthographic true RIGHT side, 270 degrees, whole object visible, centered, same plain gray background, no floor, no text, square frame.
 
 Se o desenho mudar: That changed the design. Go back to the object in the first image of this chat and only move the camera.
+
+## Interface, 0.6.0
+
+Fundo transparente, um desenho só, 256 px, sem texto, sem moldura. Sucata de bronze em carvão, uma lima `#d6ff3f`, leitura de ícone de celular.
+
+Wordmark: the words Tilt Turret, chunky toy lettering, oxidized bronze with a magma-orange glint, charcoal drop shadow, transparent background, no extra objects.
+
+Selos, um prompt por módulo, o nome no fim: flat icon of a single chunky toy scrap-kaiju piece, bronze and charcoal, one magma-orange accent, centered, transparent background, no text. Side cannon. Twin guns. Generator core. Heavy statue bust. Shield slab. Spike drum. Missile rack. Crystal spur. Crown nest.
+
+Distintivos de bicho, um por vez: flat badge, round, chunky toy monster head, bronze and charcoal, magma-orange eye, transparent background, no text. Beetle. Crab. Slug. Manta. Wasp. Tick.
+
+Fundo de menu: portrait 1080x1920, dusk meadow, a lopsided scrap tower of three blocks in the distance, empty foreground for buttons, no text, no logo.
+
+## Áudio, se for gerar
+
+Três loops de 90 segundos, 96 BPM, sem voz, sem letra. Campina: brinquedo de metais e um baixo em lá menor. Crepúsculo: cordas curtas em ré dórico. Brasa: percussão seca em mi frígio. Entregar em ogg e colocar em `assets/audio/` com os nomes meadow.ogg, dusk.ogg e ember.ogg. Sem esses arquivos o jogo usa a música sintetizada.
+

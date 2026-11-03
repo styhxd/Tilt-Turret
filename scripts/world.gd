@@ -26,6 +26,9 @@ var tutorial_mode := false
 var queue: Array[Dictionary] = []
 var held: Dictionary = {}
 var chapter := "meadow"
+var threat_deg := 0.0
+var last_fx := ""
+var mutator := ""
 var endless := false
 var run_coins := 0
 var net_kills := 0
@@ -77,6 +80,7 @@ var tick_pushes := 0
 var _fx: Node3D
 var _meshes: Dictionary = {}
 var _rings: Array[Dictionary] = []
+var _nums: Array[Dictionary] = []
 var _breath := 0.0
 var _relic_pending := false
 var _awaiting_relic := false
@@ -150,12 +154,7 @@ func start_run(is_tutorial: bool, chapter_name: String = "meadow") -> void:
 		_showcase.visible = false
 	GameState.runs += 1
 	GameState.save_game()
-	tower.begin(
-		GameState.multiplier("statue"),
-		GameState.multiplier("cannon"),
-		GameState.multiplier("generator"),
-		is_tutorial
-	)
+	tower.begin(1.0, 1.0, 1.0, is_tutorial)
 	var daily := GameState.consume_daily()
 	_fill_queue()
 	if is_tutorial:
@@ -221,6 +220,8 @@ func rotate_piece() -> void:
 
 
 func apply_freeze() -> void:
+	if GameState.pact_noglue:
+		return
 	tower.freeze()
 
 
@@ -282,6 +283,7 @@ func _physics_process(delta: float) -> void:
 	var combat := _enemies.get_child_count() > 0 and _tutorial < 0
 	AudioDirector.set_mood(combat, danger)
 	AudioDirector.set_boss(_boss != null and is_instance_valid(_boss) and not _boss.dead)
+	_threat()
 	_camera(delta)
 	_best_marker()
 	score = tower.height_blocks() * 10 + kills * 5 + balance_hits * 10
@@ -326,6 +328,7 @@ func _after_clear() -> void:
 	if wave % 3 == 0:
 		chest_open = true
 		chest_ready.emit()
+		mutation_ready.emit()
 		return
 	if _is_finale():
 		_win()
@@ -338,10 +341,12 @@ func _is_finale() -> bool:
 
 
 func _start_breath() -> void:
-	_breath = 3.2
-	var upcoming := Catalog.wave_script(wave + 1)
+	var upcoming := Catalog.wave_script(wave + 1, chapter)
+	var debut := _fresh_line(upcoming)
+	_breath = 6.5 if debut != "" else 3.2
 	var key := str(upcoming.get("card", "wave_mixed")) if not upcoming.is_empty() else "wave_mixed"
-	wave_card.emit(Locale.t("breath") % Locale.t(key))
+	var text := debut if debut != "" else Locale.t("breath") % Locale.t(key)
+	wave_card.emit(text)
 	lineup.emit(_lineup_ids(upcoming))
 
 
@@ -429,6 +434,7 @@ func _win() -> void:
 		GameState.dusk_open = true
 		GameState.save_game()
 	victory.emit()
+	AudioDirector.play("stinger_win")
 
 
 func _bank(victory_bonus: bool) -> void:
@@ -439,9 +445,11 @@ func _bank(victory_bonus: bool) -> void:
 	if victory_bonus:
 		lump += 40
 	var purse := run_coins
-	if GameState.heat:
+	if GameState.coin_heat():
 		lump *= 2
 		purse *= 2
+	if GameState.daily_matches():
+		lump *= 2
 	last_earned = lump + purse
 	GameState.coins += last_earned
 	var height := tower.height_blocks()
@@ -452,6 +460,7 @@ func _bank(victory_bonus: bool) -> void:
 	if score > GameState.best_score:
 		GameState.best_score = score
 	GameState.save_game()
+	AudioDirector.play("stinger_coin")
 
 
 func _advance_wave() -> void:
@@ -466,14 +475,18 @@ func _arm_wave() -> void:
 	_script.clear()
 	_card_pending = true
 	_boss = null
-	var script := Catalog.wave_script(wave)
+	var script := Catalog.wave_script(wave, chapter)
 	if script.is_empty() and wave % 5 == 0:
 		script = {"card": "wave_boss", "boss": "02_smash_crab", "groups": [{"id": "01_ram_beetle", "count": 3, "elite": false}]}
-	if script.is_empty():
+		_pick_mutator()
+	elif script.is_empty():
+		mutator = ""
 		var id := _random_id()
 		_script.append({"id": id, "elite": wave >= 4 and randf() < 0.18, "boss": false})
 		_script.append({"id": id, "elite": false, "boss": false})
 		return
+	if wave > 10 and wave % 5 == 0:
+		_pick_mutator()
 	if script.has("boss") and _tutorial < 0:
 		_script.append({"id": str(script.boss), "elite": true, "boss": true})
 	for group in script.get("groups", []):
@@ -489,30 +502,71 @@ func _arm_wave() -> void:
 func apply_mutation(which: int) -> void:
 	_awaiting_choice = false
 	_choice_wave = wave
-	if queue.is_empty():
-		_arm_wave()
-		return
-	if which == 0:
-		queue[0].epic = true
-	elif which == 1 and not queue.is_empty():
-		queue[0].id = "06_shield_slab"
-		queue[0].epic = false
-	else:
-		tower.fire_buff = maxf(tower.fire_buff, 4.0)
+	_apply_choice(which, false)
 	_sync_ghost()
 	_arm_wave()
 
 
+func apply_chest(which: int, boosted: bool) -> void:
+	chest_open = false
+	_apply_choice(which, boosted)
+	_sync_ghost()
+	AudioDirector.play("chest")
+	if _is_finale():
+		_win()
+	else:
+		_start_breath()
+
+
+func _apply_choice(which: int, boosted: bool) -> void:
+	if queue.is_empty() and which != 2:
+		return
+	if which == 0 and not queue.is_empty():
+		queue[0].epic = true
+	elif which == 1 and not queue.is_empty():
+		queue[0].id = "06_shield_slab"
+		queue[0].epic = boosted
+	else:
+		tower.fire_buff = maxf(tower.fire_buff, 6.0 if boosted else 4.0)
+
+
 func _announce() -> void:
 	_card_pending = false
-	_card_left = 1.0
 	card_count += 1
-	var script := Catalog.wave_script(wave)
+	var script := Catalog.wave_script(wave, chapter)
 	var key := str(script.get("card", "wave_mixed"))
 	if script.is_empty() and wave % 5 == 0:
 		key = "wave_boss"
-	wave_card.emit(Locale.t(key))
+	var debut := _fresh_line(script)
+	var text := debut if debut != "" else Locale.t(key)
+	if mutator != "" and wave > 10:
+		text += "\n" + Locale.t(mutator)
+	_card_left = 6.5 if debut != "" else 1.0
+	wave_card.emit(text)
 	lineup.emit(_lineup_ids(script))
+	AudioDirector.play("stinger_wave")
+	AudioDirector.downbeat()
+
+
+func _fresh_line(script: Dictionary) -> String:
+	var fresh := ""
+	if script.has("boss") and not GameState.has_seen(str(script.boss)):
+		fresh = str(script.boss)
+	if fresh == "":
+		for group in script.get("groups", []):
+			var id := str(group.get("id", ""))
+			if id != "" and not GameState.has_seen(id):
+				fresh = id
+				break
+	if fresh == "":
+		return ""
+	GameState.mark_seen(fresh)
+	return Locale.t("debut") % [Locale.t("cre_" + fresh), Locale.t(Catalog.creature_counter(fresh))]
+
+
+func _pick_mutator() -> void:
+	var names := ["mut_fast", "mut_plate", "mut_gale"]
+	mutator = names[(maxi(wave, 1) / 5) % names.size()]
 
 
 func _lineup_ids(script: Dictionary) -> Array:
@@ -528,28 +582,48 @@ func _lineup_ids(script: Dictionary) -> Array:
 
 
 func _next_threat() -> String:
-	var upcoming := Catalog.wave_script(wave + 1)
+	var upcoming := Catalog.wave_script(wave + 1, chapter)
 	if upcoming.is_empty():
 		return Locale.t("wave") % (wave + 1)
 	return Locale.t(str(upcoming.get("card", "wave_mixed")))
 
 
 func _wind(delta: float) -> void:
-	if wave < 6:
+	if wave < _wind_from():
 		return
+	var power := 0.2 + float(wave) * 0.012
+	if mutator == "mut_gale":
+		power *= 1.6
 	if _wind_left > 0.0:
 		_wind_left -= delta
 		if _wind_left <= 0.0:
-			tower.apply_wind(_wind_dir, 0.2 + float(wave) * 0.012)
+			tower.apply_wind(_wind_dir, power)
 			wind_preview = Vector2.ZERO
 		return
 	_wind_cd -= delta
 	if _wind_cd <= 0.0:
 		_wind_dir = Vector2.from_angle(randf() * TAU)
-		_wind_left = 1.0
+		_wind_left = 2.4
 		_wind_cd = 8.5
 		wind_preview = _wind_dir
 		wind_warning.emit(_wind_dir)
+		AudioDirector.play("stinger_wind")
+
+
+func _wind_from() -> int:
+	if GameState.pact_gust:
+		return 1
+	if chapter == "dusk":
+		return 3
+	return 6
+
+
+func _threat() -> void:
+	threat_deg = tower.tilt_deg()
+	for child in _enemies.get_children():
+		if child is Enemy and (child as Enemy).is_winding():
+			var foe := child as Enemy
+			threat_deg = maxf(threat_deg, tower.predict_hit_deg(foe.impulse, foe.height_ratio))
 
 
 func _random_id() -> String:
@@ -575,6 +649,10 @@ func _spawn(id: String, elite: bool, as_boss: bool = false) -> void:
 	if chapter == "dusk":
 		chapter_def["chapter"] = "dusk"
 	enemy.setup(chapter_def, wave, elite, as_boss)
+	if mutator == "mut_fast":
+		enemy.speed *= 1.22
+	elif mutator == "mut_plate":
+		enemy.armor *= 0.72
 	if as_boss:
 		_boss = enemy
 		bosses_spawned += 1
@@ -728,14 +806,17 @@ func _on_collapsed() -> void:
 func _shoot(list: Array[Dictionary]) -> void:
 	for shot in list:
 		var style := str(shot.get("style", "cannon"))
+		last_fx = style
 		if style == "dry" or bool(shot.get("dry", false)) and float(shot.speed) <= 0.0:
 			_burst(shot.from, Color("8a9098"), 4)
 			continue
 		if style == "spike":
 			_pulse(shot.to, Color("e7ff9a"))
+			_pop_damage(shot.to, float(shot.get("damage", 0.0)), style)
 			continue
 		if bool(shot.get("beam", false)) or style == "crystal":
 			_show_beam(shot.from, shot.to, style)
+			_pop_damage(shot.to, float(shot.get("damage", 0.0)), style)
 			continue
 		var node := _take_bullet()
 		if node == null:
@@ -772,6 +853,8 @@ func _shoot(list: Array[Dictionary]) -> void:
 			"life": 2.4,
 			"style": style,
 			"target": dest,
+			"pierce": int(shot.get("pierce", 0)),
+			"hit": [],
 		})
 
 
@@ -810,23 +893,58 @@ func _touch_bullet(bullet: Dictionary) -> bool:
 	var splash := float(bullet.splash)
 	var style := str(bullet.style)
 	var reach := 0.45 if style == "twin" else 0.62
+	var hits: Array = bullet.get("hit", [])
 	for child in _enemies.get_children():
 		if not (child is Enemy) or child.dead:
 			continue
-		if node.global_position.distance_to(child.global_position) <= reach + (0.2 if splash > 0.0 else 0.0):
-			if splash > 0.0:
-				for other in _enemies.get_children():
-					if other is Enemy and not other.dead and other.global_position.distance_to(node.global_position) <= splash + 0.45:
-						other.take_damage(float(bullet.damage), splash)
-				_explode(node.global_position, style)
-			else:
-				child.take_damage(float(bullet.damage), 0.0)
-				_burst(node.global_position, _style_color(style), 8 if style != "twin" else 4)
-			if style == "crown":
-				child.marked = 2.6
-			_shake = maxf(_shake, 0.2 if style == "cannon" else 0.08)
-			return true
+		if child in hits:
+			continue
+		if node.global_position.distance_to(child.global_position) > reach + (0.2 if splash > 0.0 else 0.0):
+			continue
+		hits.append(child)
+		bullet["hit"] = hits
+		var pierce := int(bullet.get("pierce", 0))
+		if pierce > 0:
+			child.take_damage(float(bullet.damage), 0.0)
+			_pop_damage(child.global_position, float(bullet.damage), style)
+			bullet["pierce"] = pierce - 1
+			continue
+		if splash > 0.0:
+			for other in _enemies.get_children():
+				if other is Enemy and not other.dead and other.global_position.distance_to(node.global_position) <= splash + 0.45:
+					other.take_damage(float(bullet.damage), splash)
+					_pop_damage(other.global_position, float(bullet.damage), style)
+			_explode(node.global_position, style)
+		else:
+			child.take_damage(float(bullet.damage), 0.0)
+			_pop_damage(child.global_position, float(bullet.damage), style)
+			_burst(node.global_position, _style_color(style), 8 if style != "twin" else 4)
+		if style == "crown":
+			child.marked = 2.6
+		_shake = maxf(_shake, 0.08 if style == "twin" else 0.16)
+		return true
 	return false
+
+
+func _pop_damage(at: Vector3, amount: float, style: String) -> void:
+	if amount < 0.5:
+		return
+	while _nums.size() >= 12:
+		var old: Dictionary = _nums.pop_front()
+		var gone: Node = old.get("node")
+		if is_instance_valid(gone):
+			gone.queue_free()
+	var label := Label3D.new()
+	label.text = str(int(round(amount)))
+	label.font_size = 64
+	label.outline_size = 12
+	label.modulate = _style_color(style)
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.pixel_size = 0.008
+	label.position = at + Vector3(0, 0.7, 0)
+	_fx.add_child(label)
+	_nums.append({"node": label, "life": 0.55})
 
 
 func _explode(at: Vector3, style: String) -> void:
@@ -884,6 +1002,19 @@ func _fx_tick(delta: float) -> void:
 			_rings.remove_at(i)
 		else:
 			i += 1
+	var n := 0
+	while n < _nums.size():
+		var bit: Dictionary = _nums[n]
+		bit.life = float(bit.life) - delta
+		var label: Node3D = bit.node
+		if is_instance_valid(label):
+			label.position.y += delta * 1.4
+		if float(bit.life) <= 0.0:
+			if is_instance_valid(label):
+				label.queue_free()
+			_nums.remove_at(n)
+		else:
+			n += 1
 
 
 func _style_color(style: String) -> Color:
@@ -933,15 +1064,17 @@ func _camera(delta: float) -> void:
 
 
 func _place_camera(snap: bool, delta: float = 0.016) -> void:
-	var look_y := clampf(1.05 + tower.total_height * 0.22, 1.05, 6.5)
-	var dist := 6.6 + tower.total_height * 0.26
-	var want := Vector3(0.25, look_y + 1.35, dist)
+	var look_y := clampf(1.05 + tower.total_height * 0.2, 1.05, 5.4)
+	var dist := 9.2 + tower.total_height * 0.5
+	var want := Vector3(0.2, look_y + 2.4, dist)
 	if snap:
 		_cam.position = want
 	else:
 		_cam.position = _cam.position.lerp(want, 1.0 - exp(-3.2 * delta))
-	_cam.look_at(Vector3(0, look_y * 0.72, -1.5))
-	var dutch := clampf(-deg_to_rad(tower.tilt_x) * 0.55, -0.2, 0.2)
+	_cam.look_at(Vector3(0, look_y * 0.55, -1.2))
+	var dutch := 0.0
+	if tower.tilt_deg() > 12.0:
+		dutch = clampf(-deg_to_rad(tower.tilt_x) * 0.35, -0.12, 0.12)
 	var pitch := clampf(deg_to_rad(tower.tilt_z) * 0.28, -0.12, 0.12)
 	if snap:
 		_cam.rotation.z = dutch
@@ -1005,6 +1138,7 @@ func _apply_biome(wave_n: int) -> void:
 	if index == _biome or _env == null or _ground == null:
 		return
 	_biome = index
+	AudioDirector.set_biome(index)
 	var names := ["meadow", "dusk", "ember"]
 	var skies := [Color("8ec6ea"), Color("d27a62"), Color("2a140f")]
 	var fogs := [Color("c5e4f6"), Color("e7b090"), Color("4a2418")]
@@ -1058,6 +1192,20 @@ func _build_path() -> void:
 	_path_mesh.material_override = mat
 	_path_mesh.position = Vector3(0, 0.02, -4.6)
 	add_child(_path_mesh)
+	for step in 5:
+		var tick := MeshInstance3D.new()
+		var bar := BoxMesh.new()
+		bar.size = Vector3(2.2, 0.02, 0.08)
+		tick.mesh = bar
+		var tick_mat := StandardMaterial3D.new()
+		tick_mat.albedo_color = Color("f2e2a0")
+		tick_mat.emission_enabled = true
+		tick_mat.emission = Color("d6ff3f")
+		tick_mat.emission_energy_multiplier = 0.4
+		tick.material_override = tick_mat
+		tick.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		tick.position = Vector3(0, 0.05, -1.2 - float(step) * 1.6)
+		add_child(tick)
 
 
 func _build_grass() -> void:
@@ -1146,7 +1294,8 @@ func _build_scene() -> void:
 	sun.rotation_degrees = Vector3(-42, 32, 0)
 	sun.light_energy = 1.7
 	sun.light_color = Color("fff2d8")
-	sun.shadow_enabled = false
+	sun.shadow_enabled = true
+	sun.directional_shadow_max_distance = 28.0
 	var rim := DirectionalLight3D.new()
 	rim.rotation_degrees = Vector3(-18, 200, 0)
 	rim.light_energy = 0.55

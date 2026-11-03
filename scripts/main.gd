@@ -16,6 +16,7 @@ func _ready() -> void:
 
 
 func _smoke(world: World) -> void:
+	var seen_was := GameState.seen_ids
 	await get_tree().create_timer(0.2).timeout
 	if Catalog.modules().size() != 10 or Catalog.creatures().size() != 6:
 		push_error("catalog size")
@@ -269,12 +270,63 @@ func _smoke(world: World) -> void:
 		return
 	GameState.dusk_open = dusk_was
 	GameState.coins = coins_was
+	GameState.seen_ids = ""
+	var wave3 := Catalog.wave_script(3)
+	var crab := false
+	for group in wave3.get("groups", []):
+		if str(group.get("id", "")) == "02_smash_crab":
+			crab = true
+	if not crab:
+		push_error("wave 3 crab")
+		get_tree().quit(17)
+		return
+	var dusk := Catalog.wave_script(2, "dusk")
+	if str(dusk.get("card", "")) != "wave_manta":
+		push_error("dusk wave")
+		get_tree().quit(17)
+		return
+	var rank_was := GameState.upgrade_statue
+	GameState.upgrade_statue = 6
+	world.tower.begin(1.0, 1.0, 1.0, false)
+	world.tower._place_now("05_kaiju_bust", false)
+	if not world.tower._conducts(world.tower.stack.back()):
+		push_error("statue conduct")
+		get_tree().quit(18)
+		return
+	var lean_now := world.tower.tilt_deg()
+	if world.tower.predict_hit_deg(3.1, 0.5) <= lean_now:
+		push_error("predict hit")
+		get_tree().quit(18)
+		return
+	var item := {"weapon": "cannon", "cd": 0.0, "damage_mult": 1.0, "id": "02_side_cannon", "face": 0, "com": Vector3.ZERO, "base_y": 0.0, "height": 1.0, "offset": Vector2.ZERO}
+	world.tower._bullet(item, [], {"range": 8.0, "splash": 0.0, "speed": 10.0, "dmg": 4.0}, 1.0, false)
+	if world.tower.last_fx != "cannon":
+		push_error("fx cannon")
+		get_tree().quit(19)
+		return
+	item.weapon = "crystal"
+	world.tower._beam(item, [], 3.0, 8.0, false)
+	if world.tower.last_fx != "crystal":
+		push_error("fx crystal")
+		get_tree().quit(19)
+		return
+	item.weapon = "spike"
+	world.tower._aura(item, [], 2.0, 1.0)
+	if world.tower.last_fx != "spike":
+		push_error("fx spike")
+		get_tree().quit(19)
+		return
+	GameState.upgrade_statue = rank_was
+	GameState.seen_ids = seen_was
 	GameState.save_game()
 	print("SMOKE_OK")
 	get_tree().quit(0)
 
 
 func _shots(world: World, ui: UiRoot) -> void:
+	var seen_was := GameState.seen_ids
+	var dusk_was := GameState.dusk_open
+	var coins_was := GameState.coins
 	await get_tree().create_timer(0.6).timeout
 	GameState.dusk_open = false
 	ui._refresh_copy()
@@ -298,6 +350,9 @@ func _shots(world: World, ui: UiRoot) -> void:
 	_grab("path")
 	if early is Node3D:
 		early.visible = false
+		early.position = Vector3(40.0, -8.0, 40.0)
+		if early is Enemy:
+			(early as Enemy).dead = true
 	world.held = {}
 	world.queue.clear()
 	world.wave = 2
@@ -305,6 +360,20 @@ func _shots(world: World, ui: UiRoot) -> void:
 	world._fill_queue()
 	await get_tree().create_timer(0.25).timeout
 	_grab("offer")
+	if ui._queue.get_child_count() < 3:
+		push_error("three cards")
+		get_tree().quit(21)
+		return
+	var card := ui._queue.get_child(0) as Button
+	var offer_id := str(world.queue[0].id)
+	if card == null or not card.text.contains(Locale.t(Catalog.counter_key(offer_id))):
+		push_error("card counter")
+		get_tree().quit(21)
+		return
+	if ui.find_child("play", true, false) == null or ui.find_child("drop", true, false) == null:
+		push_error("hud buttons")
+		get_tree().quit(21)
+		return
 	world.choose_offer(0)
 	await get_tree().create_timer(0.25).timeout
 	_grab("held")
@@ -327,6 +396,24 @@ func _shots(world: World, ui: UiRoot) -> void:
 	world._start_breath()
 	await get_tree().create_timer(0.2).timeout
 	_grab("wave")
+	var counted := false
+	for child in ui._lineup.get_children():
+		if child is Button and str((child as Button).text).right(1).is_valid_int():
+			counted = true
+	if ui._lineup.get_child_count() < 1 or not counted:
+		push_error("lineup count")
+		get_tree().quit(22)
+		return
+	ui._open_shop()
+	await get_tree().create_timer(0.15).timeout
+	_grab("shop")
+	ui._open_codex()
+	await get_tree().create_timer(0.15).timeout
+	_grab("codex")
+	ui._on_chest()
+	await get_tree().create_timer(0.15).timeout
+	_grab("chest")
+	ui._show("hud")
 	get_tree().paused = true
 	world.tower.tilt_z = 0.34
 	world.tower.tilt_x = 0.05
@@ -337,11 +424,17 @@ func _shots(world: World, ui: UiRoot) -> void:
 	ui._on_victory()
 	await get_tree().create_timer(0.2).timeout
 	_grab("victory")
+	GameState.seen_ids = seen_was
+	GameState.dusk_open = dusk_was
+	GameState.coins = coins_was
+	GameState.save_game()
 	get_tree().quit(0)
 
 
 func _grab(name: String) -> void:
 	var img := get_viewport().get_texture().get_image()
-	var path := "res://build/shots"
+	var path := "res://build/compare"
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(path))
 	img.save_png(ProjectSettings.globalize_path(path + "/" + name + ".png"))
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://build/shots"))
+	img.save_png(ProjectSettings.globalize_path("res://build/shots/" + name + ".png"))

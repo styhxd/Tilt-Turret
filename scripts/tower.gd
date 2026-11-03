@@ -35,6 +35,10 @@ var shots: Array[Dictionary] = []
 var statue_mult := 1.0
 var cannon_mult := 1.0
 var gen_mult := 1.0
+var statue_rank := 0
+var cannon_rank := 0
+var gen_rank := 0
+var last_fx := ""
 var ghost_good := false
 var last_improved := false
 var perfect_chain := 0
@@ -65,6 +69,8 @@ var _seg_of: Array = []
 var _seg_pool: Array = []
 var _seg_holder: Array = []
 var _wires: Array[MeshInstance3D] = []
+var _stud_mats: Array[StandardMaterial3D] = []
+var _ice: MeshInstance3D
 
 
 func _ready() -> void:
@@ -81,6 +87,9 @@ func begin(run_statue: float, run_cannon: float, run_gen: float, is_tutorial: bo
 	statue_mult = run_statue
 	cannon_mult = run_cannon
 	gen_mult = run_gen
+	statue_rank = GameState.upgrade_level("statue")
+	cannon_rank = GameState.upgrade_level("cannon")
+	gen_rank = GameState.upgrade_level("generator")
 	splash_cannon = GameState.plant_splash
 	twin_air = GameState.plant_air
 	crystal_bounce = GameState.plant_bounce
@@ -205,6 +214,7 @@ func freeze() -> void:
 	freeze_cd = 45.0
 	vel_x *= 0.2
 	vel_z *= 0.2
+	_show_ice()
 	AudioDirector.play("freeze")
 
 
@@ -250,6 +260,10 @@ func tick(dt: float, enemies: Array) -> void:
 	if alive:
 		_tick_weapons(dt, enemies)
 		_tick_danger()
+		if _ice != null:
+			_ice.visible = frozen_left > 0.0
+			if _ice.visible:
+				_ice.position.y = maxf(total_height * 0.5, 0.6)
 	_tick_junk(dt)
 	_refresh_ghost_pose()
 	_apply_visual()
@@ -271,17 +285,13 @@ func _tick_fall(dt: float) -> void:
 func _lock_fall() -> void:
 	var before := _com_horizontal()
 	var def := Catalog.module(_fall_id)
-	var mass := float(def.get("mass", 1.0))
-	if _fall_id == "05_kaiju_bust":
-		mass *= statue_mult
-	var dmg_mult := 1.0
-	if _fall_epic:
-		mass *= 1.4
-		dmg_mult = 1.5
+	var mass := _placed_mass(_fall_id, float(def.get("mass", 1.0)), _fall_epic)
+	var dmg_mult := 1.5 if _fall_epic else 1.0
 	var height := float(def.get("height", 0.9))
 	var spot := preview_offset()
 	last_offset = spot
 	_fall.reparent(_lean, false)
+	ModelUtil.cast_on(_fall)
 	_fall.position = Vector3(spot.x, total_height, spot.y)
 	_fall.rotation = Vector3(0, face * PI * 0.5, 0)
 	if not supported_here():
@@ -313,8 +323,11 @@ func _lock_fall() -> void:
 	last_improved = after + 0.025 < before or (after < 0.055 and before < 0.1)
 	if last_improved:
 		perfect_chain += 1
-		fire_buff = 2.6 + minf(float(perfect_chain - 1) * 0.35, 1.2)
-		AudioDirector.play("balance")
+		var extra := 0.8 if statue_rank >= 10 else 0.0
+		fire_buff = 2.6 + extra + minf(float(perfect_chain - 1) * 0.35, 1.2)
+		if gen_rank >= 10:
+			_grant_energy(4.0)
+		AudioDirector.play("balance" if perfect_chain < 3 else "balance3")
 		AudioDirector.buzz(28)
 		balance_hit.emit()
 	else:
@@ -363,12 +376,31 @@ func _tick_pendulum(dt: float) -> void:
 func apply_hit(from: Vector3, power: float, height_ratio: float) -> void:
 	if not alive or collapsing:
 		return
+	var kick := _kick_power(from, power, height_ratio)
 	var dir := Vector2(from.x, from.z)
 	if dir.length() < 0.001:
 		dir = Vector2.RIGHT
 	dir = dir.normalized()
-	var shield := _shield_mul(dir)
-	var kick := power * (0.42 + height_ratio) * shield * 0.2
+	vel_x += dir.x * kick
+	vel_z += dir.y * kick
+	struck.emit()
+	AudioDirector.play("hit")
+	AudioDirector.buzz(12)
+	if _shield_mul(dir) < 0.98 and has_relic("reflect"):
+		deflected.emit(Vector3(dir.x, 0.0, dir.y))
+
+
+func predict_hit_deg(power: float, height_ratio: float) -> float:
+	var kick := _kick_power(Vector3(0, 0, -1), power, height_ratio)
+	return tilt_deg() + rad_to_deg(absf(kick) * 0.85)
+
+
+func _kick_power(from: Vector3, power: float, height_ratio: float) -> float:
+	var dir := Vector2(from.x, from.z)
+	if dir.length() < 0.001:
+		dir = Vector2.RIGHT
+	dir = dir.normalized()
+	var kick := power * (0.42 + height_ratio) * _shield_mul(dir) * 0.2
 	var statues := 0
 	for item in stack:
 		if str(item.id) == "05_kaiju_bust":
@@ -376,13 +408,7 @@ func apply_hit(from: Vector3, power: float, height_ratio: float) -> void:
 	kick *= 1.0 - minf(0.24, float(statues) * 0.08)
 	if frozen_left > 0.0:
 		kick *= 0.25
-	vel_x += dir.x * kick
-	vel_z += dir.y * kick
-	struck.emit()
-	AudioDirector.play("hit")
-	AudioDirector.buzz(12)
-	if shield < 0.98 and has_relic("reflect"):
-		deflected.emit(Vector3(dir.x, 0.0, dir.y))
+	return kick
 
 
 func apply_wind(dir: Vector2, power: float) -> void:
@@ -436,11 +462,7 @@ func would_light(id: String) -> bool:
 
 func _hypothetical_com(id: String, quarter: int, spot: Vector2) -> Vector3:
 	var def := Catalog.module(id)
-	var mass := float(def.get("mass", 1.0))
-	if id == "05_kaiju_bust":
-		mass *= statue_mult
-		if has_relic("magnet"):
-			mass *= 1.35
+	var mass := _weigh(id, float(def.get("mass", 1.0)), false)
 	var height := float(def.get("height", 0.9))
 	var local := Catalog.com_of(def)
 	var placed := _rotate_flat(Vector2(local.x, local.z), quarter) + spot
@@ -474,7 +496,7 @@ func _com_mass(item: Dictionary) -> float:
 func _conducts(item: Dictionary) -> bool:
 	var id := str(item.get("id", ""))
 	if id == "05_kaiju_bust":
-		return false
+		return statue_rank >= 6
 	if id == "06_shield_slab":
 		return int(item.get("face", 0)) % 2 == 1
 	return id in ["01_base_plate", "04_generator", "09_crystal_spur", "10_crown_nest"]
@@ -496,20 +518,9 @@ func _tick_energy(dt: float) -> void:
 			index += 1
 		groups.append(group)
 	if has_relic("long_line") and groups.size() > 1:
-		var merged: Array = []
-		var g := 0
-		while g < groups.size():
-			var cur: Array = (groups[g] as Array).duplicate()
-			if g + 1 < groups.size():
-				var gap := int(groups[g + 1][0]) - int(cur.back())
-				if gap == 2:
-					cur.append_array(groups[g + 1])
-					merged.append(cur)
-					g += 2
-					continue
-			merged.append(cur)
-			g += 1
-		groups = merged
+		groups = _merge_gaps(groups, false)
+	elif gen_rank >= 6 and groups.size() > 1:
+		groups = _merge_gaps(groups, true)
 	_seg_of.clear()
 	_seg_pool.clear()
 	_seg_holder.clear()
@@ -532,7 +543,7 @@ func _tick_energy(dt: float) -> void:
 					holder = int(idx)
 			elif str(item.weapon) == "generator":
 				regen += 4.0 * gen_mult
-				cap += 12.0
+				cap += 16.0 if gen_rank >= 3 else 12.0
 				pool += float(item.get("pool", 0.0))
 				if holder < 0:
 					holder = int(idx)
@@ -600,7 +611,8 @@ func _spend(index: int, cost: float) -> bool:
 func _tick_weapons(dt: float, enemies: Array) -> void:
 	_tick_energy(dt)
 	var balance := 1.0 - clampf(tilt_deg() / 24.0, 0.0, 1.0)
-	var balance_mult := 0.55 + balance * 0.9
+	var span := 1.15 if cannon_rank >= 10 else 0.9
+	var balance_mult := 0.55 + balance * span
 	if fire_buff > 0.0:
 		balance_mult *= 1.35
 	for index in stack.size():
@@ -667,6 +679,8 @@ func _cough(item: Dictionary) -> void:
 
 
 func _bullet(item: Dictionary, enemies: Array, spec: Dictionary, balance_mult: float, dry: bool = false) -> void:
+	var style := str(item.weapon)
+	last_fx = style
 	var prefer := "flying" if str(item.weapon) == "crown" or (str(item.weapon) == "twin" and twin_air) else "any"
 	if str(item.weapon) == "crown" and has_relic("crown_mark"):
 		prefer = "flying"
@@ -676,8 +690,9 @@ func _bullet(item: Dictionary, enemies: Array, spec: Dictionary, balance_mult: f
 		if dry:
 			AudioDirector.play("dry")
 		return
-	var style := str(item.weapon)
 	var splash := float(spec.splash)
+	if style == "cannon" and cannon_rank >= 3:
+		splash = maxf(splash, 0.6)
 	if style == "cannon" and splash_cannon:
 		splash = maxf(splash, 1.15)
 	if style == "missile":
@@ -698,11 +713,13 @@ func _bullet(item: Dictionary, enemies: Array, spec: Dictionary, balance_mult: f
 			"beam": false,
 			"style": style,
 			"dry": dry,
+			"pierce": 1 if style == "cannon" and cannon_rank >= 6 and not dry else 0,
 		})
 	AudioDirector.play("dry" if dry else style)
 
 
 func _beam(item: Dictionary, enemies: Array, damage: float, range: float, dry: bool = false) -> void:
+	last_fx = "crystal"
 	var prefer := "marked" if has_relic("crown_mark") else "high"
 	var target := _pick(enemies, range, prefer)
 	if target == null:
@@ -724,7 +741,7 @@ func _beam(item: Dictionary, enemies: Array, damage: float, range: float, dry: b
 		"from": _muzzle(item, 0),
 		"to": end,
 		"speed": 0.0,
-		"damage": 0.0,
+		"damage": damage,
 		"splash": 0.0,
 		"beam": true,
 		"style": "crystal",
@@ -734,6 +751,7 @@ func _beam(item: Dictionary, enemies: Array, damage: float, range: float, dry: b
 
 
 func _aura(item: Dictionary, enemies: Array, damage: float, range: float) -> void:
+	last_fx = "spike"
 	var y0 := float(item.base_y)
 	var y1 := y0 + float(item.height)
 	for node in enemies:
@@ -749,7 +767,7 @@ func _aura(item: Dictionary, enemies: Array, damage: float, range: float) -> voi
 				"from": _muzzle(item, 0),
 				"to": p,
 				"speed": 0.0,
-				"damage": 0.0,
+				"damage": damage,
 				"splash": 0.0,
 				"beam": false,
 				"style": "spike",
@@ -804,8 +822,9 @@ func _place_now(id: String, epic: bool) -> void:
 	_lean.add_child(node)
 	var height := float(def.get("height", 0.9))
 	ModelUtil.fit(node, height)
+	ModelUtil.cast_on(node)
 	node.position = Vector3(0, total_height, 0)
-	var mass := float(def.get("mass", 1.0))
+	var mass := _placed_mass(id, float(def.get("mass", 1.0)), epic)
 	stack.append({
 		"id": id,
 		"mass": mass,
@@ -957,11 +976,7 @@ func would_improve(id: String) -> bool:
 	if def.is_empty():
 		return false
 	var before := _com_horizontal()
-	var mass := float(def.get("mass", 1.0))
-	if id == "05_kaiju_bust":
-		mass *= statue_mult
-		if has_relic("magnet"):
-			mass *= 1.35
+	var mass := _weigh(id, float(def.get("mass", 1.0)), false)
 	var height := float(def.get("height", 0.9))
 	var com := Catalog.com_of(def)
 	var placed := _rotate_flat(Vector2(com.x, com.z), face) + preview_offset()
@@ -982,6 +997,79 @@ func would_improve(id: String) -> bool:
 	var next := acc / total
 	var after := _world_xz(Vector2(next.x, next.z)).length()
 	return after + 0.02 < before or (after < 0.06 and before < 0.12)
+
+
+func _weigh(id: String, base: float, epic: bool) -> float:
+	var mass := _placed_mass(id, base, epic)
+	if id == "05_kaiju_bust" and has_relic("magnet"):
+		mass *= 1.35
+	return mass
+
+
+func _placed_mass(id: String, base: float, epic: bool) -> float:
+	var mass := base
+	if id == "05_kaiju_bust":
+		mass *= statue_mult
+		if statue_rank >= 3:
+			mass *= 1.15
+	if epic:
+		mass *= 1.4
+	return mass
+
+
+func _grant_energy(amount: float) -> void:
+	for item in stack:
+		var id := str(item.get("id", ""))
+		if id == "04_generator" or id == "01_base_plate":
+			item["pool"] = float(item.get("pool", 0.0)) + amount
+
+
+func _merge_gaps(groups: Array, need_gen: bool) -> Array:
+	var merged: Array = []
+	var g := 0
+	while g < groups.size():
+		var cur: Array = (groups[g] as Array).duplicate()
+		if g + 1 < groups.size():
+			var nxt: Array = groups[g + 1]
+			var gap := int(nxt[0]) - int(cur.back())
+			var allowed := gap == 2
+			if need_gen:
+				allowed = allowed and (_group_has_gen(cur) or _group_has_gen(nxt))
+			if allowed:
+				cur.append_array(nxt)
+				merged.append(cur)
+				g += 2
+				continue
+		merged.append(cur)
+		g += 1
+	return merged
+
+
+func _group_has_gen(group: Array) -> bool:
+	for idx in group:
+		if str(stack[int(idx)].get("id", "")) == "04_generator":
+			return true
+	return false
+
+
+func _show_ice() -> void:
+	if _ice == null:
+		_ice = MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(1.7, 3.4, 1.7)
+		_ice.mesh = box
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.7, 0.9, 1.0, 0.28)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.emission_enabled = true
+		mat.emission = Color("9fdfff")
+		mat.emission_energy_multiplier = 0.6
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_ice.material_override = mat
+		_ice.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_lean.add_child(_ice)
+	_ice.visible = true
+	_ice.position.y = maxf(total_height * 0.5, 0.6)
 
 
 func _worst_piece() -> String:
@@ -1020,10 +1108,14 @@ func preview_offset() -> Vector2:
 
 
 func supported_here() -> bool:
+	return _stud_ok(stud)
+
+
+func _stud_ok(index: int) -> bool:
 	if stack.is_empty():
 		return true
 	var top: Dictionary = stack.back()
-	var delta: Vector2 = preview_offset() - Vector2(top.get("offset", Vector2.ZERO))
+	var delta := Vector2(float(index) * STUD, 0.0)
 	return delta.length() <= float(top.get("span", 0.5)) + 0.02
 
 
@@ -1083,11 +1175,13 @@ func _build_studs() -> void:
 	mat.emission_energy_multiplier = 0.4
 	for _i in 7:
 		var mark := MeshInstance3D.new()
+		var tint := mat.duplicate() as StandardMaterial3D
 		mark.mesh = mesh
-		mark.material_override = mat
+		mark.material_override = tint
 		mark.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_lean.add_child(mark)
 		_stud_marks.append(mark)
+		_stud_mats.append(tint)
 
 
 func _place_studs() -> void:
@@ -1102,6 +1196,17 @@ func _place_studs() -> void:
 		var x := origin.x + float(stud_i) * STUD
 		_stud_marks[i].position = Vector3(x, y, origin.y)
 		_stud_marks[i].visible = alive and not falling and absi(stud_i) <= span
+		if i < _stud_mats.size():
+			var supported := _stud_ok(stud_i)
+			var tint := Color("f2e2a0")
+			if not supported:
+				tint = Color("ff5a3c")
+			elif stud_i == stud and _ghost_id != "":
+				tint = Color("d6ff3f") if ghost_good else Color("ff5a3c")
+			elif supported:
+				tint = Color("8fe08a")
+			_stud_mats[i].albedo_color = tint
+			_stud_mats[i].emission = tint
 
 
 func _tick_junk(dt: float) -> void:

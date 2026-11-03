@@ -22,6 +22,7 @@ var _tutorial: Label
 var _wind: Label
 var _balance: Label
 var _freeze: Button
+var _freeze_arc: CooldownArc
 var _drop: Button
 var _toast: Label
 var _toast_life := 0.0
@@ -49,10 +50,20 @@ var _banner: Label
 var _banner_life := 0.0
 var _choice: Control
 var _heat_btn: Button
+var _pact_shell: Button
+var _pact_gust: Button
+var _pact_glue: Button
+var _codex_btn: Button
+var _codex: Control
+var _codex_box: VBoxContainer
+var _sfx_slider: HSlider
+var _music_slider: HSlider
+var _chest_boost := false
+var _codex_from_run := false
 var _flag: Button
 var _purse: Label
 var _boss_label: Label
-var _lineup: HBoxContainer
+var _lineup: VBoxContainer
 var _endless_btn: Button
 var _dusk_btn: Button
 var _dusk_menu: Button
@@ -112,7 +123,7 @@ func _process(delta: float) -> void:
 		_drop.scale = Vector2.ONE
 	_meter.queue_redraw()
 	_score.text = str(world.score)
-	_wave.text = Locale.t("wave") % world.wave
+	_wave.text = Locale.t("wave_of") % [world.wave, 10] if world.wave <= 10 else Locale.t("wave") % world.wave
 	if _purse:
 		_purse.text = "+%d" % world.run_coins
 	if _boss_label:
@@ -121,7 +132,10 @@ func _process(delta: float) -> void:
 		if boss_alive:
 			var ratio := world._boss.hp / maxf(world._boss.max_hp, 0.01)
 			_boss_label.text = "%s  %d%%" % [Locale.t("cre_" + world._boss.kind), int(ratio * 100.0)]
-	_freeze.visible = world.tower.tilt_deg() >= 18.0 and world.tower.freeze_ready()
+	_freeze.visible = not GameState.pact_noglue and world.tower.tilt_deg() >= 18.0
+	_freeze.disabled = not world.tower.freeze_ready()
+	if _freeze_arc:
+		_freeze_arc.queue_redraw()
 	_drop.disabled = world.tower.falling or world.held.is_empty()
 	if _flag:
 		_flag.visible = world._breath > 0.0
@@ -180,16 +194,30 @@ func _build() -> void:
 	menu_box.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	menu_box.offset_left = -420
 	menu_box.offset_right = 420
-	menu_box.offset_top = -520
+	menu_box.offset_top = -700
 	menu_box.offset_bottom = -36
 	_play = _button("play", _on_play, true)
-	_heat_btn = _button("heat", _toggle_heat, false)
-	_heat_btn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_pact_shell = _button("pact_shell", func() -> void: _toggle_pact("shell"), false)
+	_pact_gust = _button("pact_gust", func() -> void: _toggle_pact("gust"), false)
+	_pact_glue = _button("pact_glue", func() -> void: _toggle_pact("glue"), false)
+	var pact_row := HBoxContainer.new()
+	pact_row.add_theme_constant_override("separation", 12)
+	pact_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	for pact in [_pact_shell, _pact_gust, _pact_glue]:
+		pact.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pact_row.add_child(pact)
 	_dusk_menu = _button("dusk", _on_dusk, false)
 	_dusk_menu.visible = false
 	_mod_btn = _button("modules", _open_shop, false)
+	_codex_btn = _button("codex", _open_codex, false)
 	_set_btn = _button("settings", _open_settings, false)
-	for node in [_play, _heat_btn, _dusk_menu, _mod_btn, _set_btn]:
+	var nav := HBoxContainer.new()
+	nav.add_theme_constant_override("separation", 12)
+	nav.alignment = BoxContainer.ALIGNMENT_CENTER
+	for nav_btn in [_mod_btn, _codex_btn, _set_btn]:
+		nav_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nav.add_child(nav_btn)
+	for node in [_play, pact_row, _dusk_menu, nav]:
 		menu_box.add_child(node)
 	_menu.add_child(menu_box)
 	add_child(_menu)
@@ -208,11 +236,26 @@ func _build() -> void:
 	scroll.offset_top = 36
 	scroll.offset_right = -28
 	scroll.offset_bottom = -28
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_shop.add_child(scroll)
 	_shop_box = _column()
 	_shop_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(_shop_box)
 	add_child(_shop)
+
+	_codex = _card()
+	var codex_scroll := ScrollContainer.new()
+	codex_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	codex_scroll.offset_left = 28
+	codex_scroll.offset_top = 36
+	codex_scroll.offset_right = -28
+	codex_scroll.offset_bottom = -28
+	codex_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_codex.add_child(codex_scroll)
+	_codex_box = _column()
+	_codex_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	codex_scroll.add_child(_codex_box)
+	add_child(_codex)
 
 	_settings = _card()
 	_build_settings()
@@ -275,24 +318,25 @@ func _build_hud() -> void:
 	_wave.offset_right = -28
 	_wave.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_hud.add_child(_wave)
-	_banner = _label("", 34)
-	_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_banner.offset_left = -460
-	_banner.offset_right = 460
-	_banner.offset_top = 132
-	_banner.offset_bottom = 200
-	_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_banner = _label("", 30)
+	_banner.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_banner.offset_left = -540
+	_banner.offset_right = -24
+	_banner.offset_top = 96
+	_banner.offset_bottom = 156
+	_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_banner.clip_text = true
+	_banner.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_banner.visible = false
 	_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(_banner)
-	_lineup = HBoxContainer.new()
-	_lineup.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_lineup.offset_left = -480
-	_lineup.offset_right = 480
-	_lineup.offset_top = 200
-	_lineup.offset_bottom = 268
-	_lineup.alignment = BoxContainer.ALIGNMENT_CENTER
+	_lineup = VBoxContainer.new()
+	_lineup.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_lineup.offset_left = 20
+	_lineup.offset_right = 300
+	_lineup.offset_top = 660
+	_lineup.offset_bottom = 1280
+	_lineup.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_lineup.add_theme_constant_override("separation", 10)
 	_lineup.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_lineup.visible = false
@@ -315,10 +359,10 @@ func _build_hud() -> void:
 	_meter = LeanBar.new()
 	_meter.world = world
 	_meter.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_meter.offset_left = 28
-	_meter.offset_right = 188
-	_meter.offset_top = 132
-	_meter.offset_bottom = 292
+	_meter.offset_left = 16
+	_meter.offset_right = 132
+	_meter.offset_top = 150
+	_meter.offset_bottom = 640
 	_hud.add_child(_meter)
 
 	_purse = _label("+0", 28)
@@ -330,9 +374,9 @@ func _build_hud() -> void:
 
 	_boss_label = _label("", 32)
 	_boss_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_boss_label.offset_left = -520
-	_boss_label.offset_top = 96
-	_boss_label.offset_right = -28
+	_boss_label.offset_left = -420
+	_boss_label.offset_top = 150
+	_boss_label.offset_right = -150
 	_boss_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_boss_label.modulate = Color("ff5a32")
 	_boss_label.visible = false
@@ -342,19 +386,19 @@ func _build_hud() -> void:
 	_queue.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	_queue.offset_left = -500
 	_queue.offset_right = 500
-	_queue.offset_top = -560
-	_queue.offset_bottom = -380
+	_queue.offset_top = -620
+	_queue.offset_bottom = -290
 	_queue.alignment = BoxContainer.ALIGNMENT_CENTER
 	_queue.add_theme_constant_override("separation", 12)
 	_queue.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(_queue)
 
 	_tutorial = _label("", 34)
-	_tutorial.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_tutorial.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	_tutorial.offset_left = -480
 	_tutorial.offset_right = 480
-	_tutorial.offset_top = -430
-	_tutorial.offset_bottom = -280
+	_tutorial.offset_top = 150
+	_tutorial.offset_bottom = 240
 	_tutorial.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_tutorial.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hud.add_child(_tutorial)
@@ -376,33 +420,38 @@ func _build_hud() -> void:
 
 	_freeze = _button("freeze", _on_freeze, false)
 	_freeze.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_freeze.offset_left = -520
-	_freeze.offset_top = -250
-	_freeze.offset_right = -250
-	_freeze.offset_bottom = -130
+	_freeze.offset_left = -250
+	_freeze.offset_top = -270
+	_freeze.offset_right = -24
+	_freeze.offset_bottom = -160
 	_freeze.visible = false
 	_hud.add_child(_freeze)
+	_freeze_arc = CooldownArc.new()
+	_freeze_arc.world = world
+	_freeze_arc.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_freeze_arc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_freeze.add_child(_freeze_arc)
 
 	_drop = _button("drop", _on_drop, true)
-	_drop.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_drop.offset_left = -250
-	_drop.offset_top = -250
-	_drop.offset_right = -36
-	_drop.offset_bottom = -36
+	_drop.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_drop.offset_left = -500
+	_drop.offset_top = -150
+	_drop.offset_right = 500
+	_drop.offset_bottom = -24
 	_hud.add_child(_drop)
 	var turn := _button("turn", world.rotate_piece, false)
 	turn.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	turn.offset_left = 36
-	turn.offset_top = -250
-	turn.offset_right = 280
-	turn.offset_bottom = -36
+	turn.offset_left = 24
+	turn.offset_top = -270
+	turn.offset_right = 210
+	turn.offset_bottom = -160
 	_hud.add_child(turn)
 	_flag = _button("call_wave", func() -> void: world.call_wave(), true)
-	_flag.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_flag.offset_left = -180
-	_flag.offset_right = 180
-	_flag.offset_top = -720
-	_flag.offset_bottom = -600
+	_flag.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	_flag.offset_left = -280
+	_flag.offset_right = -16
+	_flag.offset_top = -48
+	_flag.offset_bottom = 64
 	_flag.visible = false
 	_hud.add_child(_flag)
 
@@ -416,7 +465,23 @@ func _build_settings() -> void:
 	box.offset_bottom = -48
 	box.add_child(_label_key("settings", 56))
 	box.add_child(_button("sound", _toggle_sfx, false))
+	_sfx_slider = HSlider.new()
+	_sfx_slider.min_value = 0.0
+	_sfx_slider.max_value = 1.0
+	_sfx_slider.step = 0.05
+	_sfx_slider.value = GameState.sfx_volume
+	_sfx_slider.custom_minimum_size = Vector2(0, 48)
+	_sfx_slider.value_changed.connect(func(v: float) -> void: GameState.set_sfx_volume(v))
+	box.add_child(_sfx_slider)
 	box.add_child(_button("music", _toggle_music, false))
+	_music_slider = HSlider.new()
+	_music_slider.min_value = 0.0
+	_music_slider.max_value = 1.0
+	_music_slider.step = 0.05
+	_music_slider.value = GameState.music_volume
+	_music_slider.custom_minimum_size = Vector2(0, 48)
+	_music_slider.value_changed.connect(func(v: float) -> void: GameState.set_music_volume(v))
+	box.add_child(_music_slider)
 	box.add_child(_button("language", _toggle_lang, false))
 	box.add_child(_button("how_to", _replay_tutorial, false))
 	box.add_child(_button("remove_ads", _buy_ads, false))
@@ -477,8 +542,10 @@ func _build_chest() -> void:
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(body)
-	box.add_child(_button("chest", _on_chest_ad, true))
-	box.add_child(_button("skip", _on_chest_skip, false))
+	box.add_child(_button("mut_0", func() -> void: _chest_pick(0), true))
+	box.add_child(_button("mut_1", func() -> void: _chest_pick(1), false))
+	box.add_child(_button("mut_2", func() -> void: _chest_pick(2), false))
+	box.add_child(_button("chest", _on_chest_ad, false))
 	_chest.add_child(box)
 
 
@@ -556,6 +623,7 @@ func _on_fell() -> void:
 	var culprit := ""
 	if world.tower.culprit_id != "":
 		culprit = "\n" + Locale.t("culprit") % Locale.t("mod_" + world.tower.culprit_id)
+		culprit += "\n" + Locale.t("culprit_why")
 	var net := ""
 	if world.net_kills > 0:
 		net = "\n%s %d" % [Locale.t("network"), world.net_kills]
@@ -654,23 +722,36 @@ func _on_over_menu() -> void:
 
 
 func _on_chest() -> void:
-	_chest_body()
+	_chest_boost = false
+	var body := _chest.find_child("ChestBody", true, false) as Label
+	if body:
+		body.text = Locale.t("chest_body")
 	_show("chest")
+	AudioDirector.play("chest")
+
+
+func _chest_pick(which: int) -> void:
+	if world:
+		world.apply_chest(which, _chest_boost)
+	_chest_boost = false
+	_show("hud")
 
 
 func _on_chest_ad() -> void:
 	Ads.show_rewarded("chest", func(ok: bool) -> void:
 		if ok:
-			world.grant_epic()
+			_chest_boost = true
+			if world:
+				world.grant_epic()
+			_toast_msg(Locale.t("epic"))
 		else:
 			_toast_msg(Locale.t("ad_unavailable"))
-		world.close_chest()
-		_show("hud")
 	)
 
 
 func _on_chest_skip() -> void:
-	world.close_chest()
+	if world:
+		world.close_chest()
 	_show("hud")
 	AudioDirector.play("click")
 
@@ -701,6 +782,51 @@ func _open_shop() -> void:
 	AudioDirector.play("click")
 	_rebuild_shop()
 	_show("shop")
+
+
+func _open_codex(focus: String = "") -> void:
+	_codex_from_run = _screen == "hud"
+	AudioDirector.play("click")
+	_rebuild_codex(focus)
+	_show("codex")
+
+
+func _close_codex() -> void:
+	if _codex_from_run:
+		_show("hud")
+		return
+	_open_menu()
+
+
+func _rebuild_codex(focus: String) -> void:
+	if _codex_box == null:
+		return
+	for child in _codex_box.get_children():
+		child.queue_free()
+	_codex_box.add_child(_label_key("codex", 52))
+	for id in Catalog.creatures().keys():
+		var line := _label("%s\n%s" % [Locale.t("cre_" + id), Locale.t("hint_" + id)], 26)
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		line.custom_minimum_size = Vector2(960, 0)
+		line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		if id == focus:
+			line.modulate = Color("d6ff3f")
+		_codex_box.add_child(line)
+	for id in Catalog.modules().keys():
+		var line := _label("%s\n%s" % [Locale.t("mod_" + id), Locale.t("desc_" + id)], 26)
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		line.custom_minimum_size = Vector2(960, 0)
+		line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_codex_box.add_child(line)
+	_codex_box.add_child(_button("close", _close_codex, false))
+
+
+func _paint_pact(button: Button, on: bool) -> void:
+	if button == null:
+		return
+	var key := str(button.name)
+	button.text = "%s\n%s" % [Locale.t(key), Locale.t("on") if on else Locale.t("off")]
+	button.modulate = Color("d6ff3f") if on else Color("f4f1ea")
 
 
 func _open_settings() -> void:
@@ -771,6 +897,9 @@ func _rebuild_shop() -> void:
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_shop_box.add_child(hint)
 	_shop_box.add_child(_label("%s: %d" % [Locale.t("coins"), GameState.coins], 32))
+	_add_upgrade("statue", "upgrade_statue")
+	_add_upgrade("cannon", "upgrade_cannon")
+	_add_upgrade("generator", "upgrade_generator")
 	_add_toy("ghost")
 	_add_toy("base_gen")
 	_add_toy("relic")
@@ -782,6 +911,7 @@ func _rebuild_shop() -> void:
 		var card := PanelContainer.new()
 		var inner := _label("%s\n%s" % [Locale.t("mod_" + id), Locale.t("desc_" + id)], 26)
 		inner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		inner.custom_minimum_size = Vector2(960, 0)
 		card.add_child(inner)
 		var stripe := StyleBoxFlat.new()
 		stripe.bg_color = Color(ModelUtil.FALLBACK.get(id, Color.WHITE), 0.28)
@@ -838,7 +968,9 @@ func _add_upgrade(stat: String, key: String) -> void:
 	var level := GameState.upgrade_level(stat)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
-	var name_l := _label("%s  %d/10" % [Locale.t(key), level], 28)
+	var name_l := _label("%s  %d/10\n%s" % [Locale.t(key), level, GameState.upgrade_blurb(stat)], 26)
+	name_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	name_l.custom_minimum_size = Vector2(520, 0)
 	name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(name_l)
 	var b := Button.new()
@@ -854,7 +986,7 @@ func _add_upgrade(stat: String, key: String) -> void:
 			else:
 				_toast_msg(Locale.t("coins"))
 		)
-	b.custom_minimum_size = Vector2(280, 84)
+	b.custom_minimum_size = Vector2(210, 84)
 	row.add_child(b)
 	_shop_box.add_child(row)
 
@@ -920,13 +1052,21 @@ func _piece_card(piece: Dictionary, index: int) -> Control:
 		light = ""
 	elif world.tower != null and world.tower.would_light(id):
 		light = "\n" + Locale.t("seal_lights")
-	var text := "%s\n%s  %s%s" % [Locale.t("mod_" + id), Locale.t(Catalog.seal_key(id)), arrow, light]
+	var counter := Locale.t(Catalog.counter_key(id))
+	var cost := int(Catalog.ENERGY_COST.get(str(Catalog.module(id).get("weapon", "")), 0))
+	var pips := ""
+	if cost > 0:
+		pips = "  " + "●".repeat(cost)
+	var dry := ""
+	if index < 0 and world.tower != null and not world.tower.would_light(id) and cost > 0:
+		dry = "\n" + Locale.t("dry_cough")
+	var text := "%s\n%s  %s\n%s%s%s%s" % [Locale.t("mod_" + id), Locale.t(Catalog.seal_key(id)), arrow, counter, pips, light, dry]
 	if bool(piece.get("epic", false)):
 		text = Locale.t("epic") + "\n" + text
 	var chip := Button.new()
 	chip.text = text
 	chip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	chip.custom_minimum_size = Vector2(300, 150) if index < 0 else Vector2(300, 170)
+	chip.custom_minimum_size = Vector2(280, 250) if index < 0 else Vector2(280, 260)
 	chip.add_theme_font_size_override("font_size", 26)
 	chip.add_theme_color_override("font_color", Color("14180f"))
 	if index >= 0:
@@ -944,7 +1084,7 @@ func _piece_card(piece: Dictionary, index: int) -> Control:
 	chip_box.set_corner_radius_all(22)
 	chip_box.content_margin_left = 14
 	chip_box.content_margin_right = 14
-	chip_box.content_margin_top = 10
+	chip_box.content_margin_top = 62
 	chip_box.content_margin_bottom = 10
 	chip_box.border_color = Color("d6ff3f") if bool(piece.get("epic", false)) or index < 0 else Color("1c2430")
 	chip_box.set_border_width_all(4)
@@ -952,11 +1092,26 @@ func _piece_card(piece: Dictionary, index: int) -> Control:
 	chip.add_theme_stylebox_override("hover", chip_box)
 	chip.add_theme_stylebox_override("pressed", chip_box)
 	chip.add_theme_stylebox_override("disabled", chip_box)
+	var seal := SealMark.new()
+	seal.kind = "statue" if id == "05_kaiju_bust" else str(Catalog.module(id).get("weapon", "none"))
+	seal.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	seal.offset_left = -26
+	seal.offset_right = 26
+	seal.offset_top = 8
+	seal.offset_bottom = 58
+	seal.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip.add_child(seal)
 	return chip
 
 
+func _toggle_pact(which: String) -> void:
+	GameState.toggle_pact(which)
+	AudioDirector.play("click")
+	_refresh_copy()
+
+
 func _toggle_heat() -> void:
-	GameState.set_heat(not GameState.heat)
+	GameState.set_heat(not GameState.coin_heat())
 	AudioDirector.play("click")
 	_refresh_copy()
 
@@ -976,19 +1131,37 @@ func _on_lineup(ids: Array) -> void:
 	for child in _lineup.get_children():
 		child.queue_free()
 	_lineup.visible = not ids.is_empty()
+	var buckets: Dictionary = {}
+	var order: Array[String] = []
 	for entry in ids:
 		var id := str(entry.get("id", "")) if entry is Dictionary else str(entry)
 		var boss := entry is Dictionary and bool(entry.get("boss", false))
 		var elite := entry is Dictionary and bool(entry.get("elite", false))
-		var chip := Panel.new()
-		chip.custom_minimum_size = Vector2(58, 58)
-		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var key := id + ("*" if boss else "")
+		if not buckets.has(key):
+			order.append(key)
+			buckets[key] = {"id": id, "count": 0, "boss": boss, "elite": elite}
+		buckets[key].count = int(buckets[key].count) + 1
+	for key in order:
+		var info: Dictionary = buckets[key]
+		var id := str(info.id)
+		var chip := Button.new()
+		chip.text = "%s  %d" % [Locale.t("cre_" + id), int(info.count)]
+		chip.custom_minimum_size = Vector2(180, 72)
+		chip.add_theme_font_size_override("font_size", 24)
 		var box := StyleBoxFlat.new()
 		box.bg_color = Enemy.role_color(id)
-		box.set_corner_radius_all(29)
-		box.set_border_width_all(5 if boss or elite else 0)
-		box.border_color = Color("ff5a32") if boss else Color("ffd15a")
-		chip.add_theme_stylebox_override("panel", box)
+		box.set_corner_radius_all(16)
+		box.set_border_width_all(5 if bool(info.boss) or bool(info.elite) else 0)
+		box.border_color = Color("ff5a32") if bool(info.boss) else Color("ffd15a")
+		box.content_margin_left = 10
+		box.content_margin_right = 10
+		chip.add_theme_stylebox_override("normal", box)
+		chip.add_theme_stylebox_override("hover", box)
+		chip.add_theme_stylebox_override("pressed", box)
+		chip.add_theme_color_override("font_color", Color("14180f"))
+		var focus := id
+		chip.pressed.connect(func() -> void: _open_codex(focus))
 		_lineup.add_child(chip)
 
 
@@ -1036,20 +1209,23 @@ func _queue_signature() -> String:
 func _refresh_copy() -> void:
 	_title.text = Locale.t("title")
 	_sub.text = Locale.t("subtitle")
-	_best.text = "%s  %d" % [Locale.t("best"), GameState.best_height]
+	_best.text = Locale.t("your_height") % GameState.best_height
 	_coins.text = "%s  %d" % [Locale.t("coins"), GameState.coins]
-	var today := Time.get_date_string_from_system()
-	_daily.visible = GameState.last_daily != today
-	_daily.text = Locale.t("daily")
+	GameState.ensure_daily_pact()
+	_daily.visible = true
+	_daily.text = Locale.t("daily_pact") % Locale.t("pact_" + GameState.daily_pact)
 	_play.text = Locale.t("play")
-	if _heat_btn:
-		_heat_btn.text = Locale.t("heat_on") if GameState.heat else Locale.t("heat_off")
+	_paint_pact(_pact_shell, GameState.pact_shell)
+	_paint_pact(_pact_gust, GameState.pact_gust)
+	_paint_pact(_pact_glue, GameState.pact_noglue)
 	if _dusk_menu:
 		_dusk_menu.visible = GameState.dusk_open
 		_dusk_menu.text = Locale.t("dusk")
 	if _flag:
 		_flag.text = Locale.t("call_wave")
 	_mod_btn.text = Locale.t("modules")
+	if _codex_btn:
+		_codex_btn.text = Locale.t("codex")
 	_set_btn.text = Locale.t("settings")
 	_drop.text = Locale.t("drop")
 	_freeze.text = Locale.t("freeze")
@@ -1091,12 +1267,13 @@ func _show(screen: String) -> void:
 	_menu.visible = screen == "menu"
 	_hud.visible = screen == "hud"
 	_shop.visible = screen == "shop"
+	_codex.visible = screen == "codex"
 	_settings.visible = screen == "settings"
 	_pause.visible = screen == "pause"
 	_over.visible = screen == "over"
 	_chest.visible = screen == "chest"
 	_privacy.visible = screen == "privacy"
-	if screen == "menu" or screen == "settings" or screen == "shop" or screen == "privacy":
+	if screen == "menu" or screen == "settings" or screen == "shop" or screen == "privacy" or screen == "codex":
 		_refresh_copy()
 
 
@@ -1149,6 +1326,7 @@ func _label_key(key: String, size: int) -> Label:
 
 func _button(key: String, cb: Callable, primary: bool) -> Button:
 	var button := Button.new()
+	button.name = key
 	button.text = Locale.t(key)
 	button.set_meta("key", key)
 	button.set_meta("primary", primary)
@@ -1192,7 +1370,7 @@ func _theme() -> Theme:
 	var panel := _box(Color(0.07, 0.14, 0.22, 0.94), 28)
 	theme.set_stylebox("panel", "Panel", panel)
 	theme.set_color("font_color", "Label", Color("f4f1ea"))
-	theme.set_constant("outline_size", "Label", 10)
+	theme.set_constant("outline_size", "Label", 4)
 	theme.set_color("font_outline_color", "Label", Color("102033"))
 	return theme
 
@@ -1213,7 +1391,7 @@ func _box(color: Color, radius: int) -> StyleBoxFlat:
 
 
 func _apply_theme(theme: Theme) -> void:
-	for node in [_menu, _hud, _shop, _settings, _pause, _over, _chest, _privacy, _toast]:
+	for node in [_menu, _hud, _shop, _codex, _settings, _pause, _over, _chest, _privacy, _toast]:
 		node.theme = theme
 
 
@@ -1223,31 +1401,114 @@ class LeanBar extends Control:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 	func _draw() -> void:
 		var center := size * 0.5
-		var radius := minf(size.x, size.y) * 0.46
-		draw_circle(center, radius, Color("163044"))
-		draw_arc(center, radius, 0, TAU, 48, Color("d6ff3f"), 4.0, true)
-		draw_line(center - Vector2(radius, 0), center + Vector2(radius, 0), Color("2a3c30"), 2.0)
-		draw_line(center - Vector2(0, radius), center + Vector2(0, radius), Color("2a3c30"), 2.0)
+		var radius := minf(size.x, size.y) * 0.42
+		draw_rect(Rect2(Vector2.ZERO, size), Color(0.08, 0.14, 0.2, 0.82))
+		draw_line(center - Vector2(0, radius), center + Vector2(0, radius), Color("2a3c30"), 3.0)
+		draw_line(center - Vector2(radius * 0.7, 0), center + Vector2(radius * 0.7, 0), Color("2a3c30"), 2.0)
 		var lean := Vector2.ZERO
 		var preview := Vector2.ZERO
 		var mag := 0.0
+		var threat := 0.0
+		var buff := 0.0
 		if world != null and world.tower != null:
 			mag = world.tower.tilt_deg()
+			threat = world.threat_deg
+			buff = world.tower.fire_buff
 			lean = Vector2(rad_to_deg(world.tower.tilt_x), rad_to_deg(world.tower.tilt_z))
 			preview = world.tower.preview_equilibrium_deg()
 		var col := Color("8fe05a")
 		if mag >= 8.0:
 			col = Color("f0c14a")
-		if mag >= 18.0:
+		if mag >= 18.0 or threat >= 28.0:
 			col = Color("ff5a3c")
 		var bubble := center + Vector2(lean.x, -lean.y) / 28.0 * radius
-		draw_circle(bubble, radius * 0.16, col)
-		draw_circle(bubble, radius * 0.07, Color("fff6c8"))
+		bubble.x = clampf(bubble.x, 10, size.x - 10)
+		bubble.y = clampf(bubble.y, 10, size.y - 28)
+		draw_circle(bubble, 14.0, col)
+		draw_circle(bubble, 6.0, Color("fff6c8"))
 		if world != null and world.tower != null and world.tower._ghost_id != "":
 			var ghost := center + Vector2(preview.x, -preview.y) / 28.0 * radius
-			draw_arc(ghost, radius * 0.12, 0, TAU, 24, Color("d6ff3f"), 3.0, true)
-			if GameState.toy_ghost and ThemeDB.fallback_font != null:
-				draw_string(ThemeDB.fallback_font, ghost + Vector2(8, -8), "%d°" % int(preview.length()), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color("f4f1ea"))
+			draw_arc(ghost, 12.0, 0, TAU, 24, Color("d6ff3f"), 3.0, true)
+		if threat > mag + 0.6:
+			var mark := center + Vector2(0, -clampf(threat, 0, 28) / 28.0 * radius)
+			draw_arc(mark, 16.0, 0, TAU, 24, Color("ff5a3c"), 4.0, true)
 		if world != null and world.wind_preview.length() > 0.2:
-			var tip := center + world.wind_preview.normalized() * radius * 0.7
-			draw_line(center, tip, Color("9fd0ff"), 4.0)
+			var tip := center + world.wind_preview.normalized() * radius * 0.75
+			draw_line(center, tip, Color("9fd0ff"), 5.0)
+		if buff > 0.05:
+			var h := clampf(buff / 3.8, 0.05, 1.0) * (size.y - 16.0)
+			draw_rect(Rect2(size.x - 14, size.y - 8 - h, 8, h), Color("d6ff3f"))
+		if ThemeDB.fallback_font != null:
+			draw_string(ThemeDB.fallback_font, Vector2(8, size.y - 8), "%d°" % int(round(mag)), HORIZONTAL_ALIGNMENT_LEFT, -1, 28, col)
+			if GameState.toy_ghost and threat > mag + 0.6:
+				draw_string(ThemeDB.fallback_font, Vector2(8, 28), "%d°" % int(round(threat)), HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color("ff5a3c"))
+
+
+class CooldownArc extends Control:
+	var world: World
+	func _draw() -> void:
+		if world == null or world.tower == null:
+			return
+		var left := world.tower.freeze_cd
+		if left <= 0.0:
+			return
+		var frac := clampf(left / 45.0, 0.0, 1.0)
+		var center := size * 0.5
+		var radius := minf(size.x, size.y) * 0.42
+		draw_arc(center, radius, -PI * 0.5, -PI * 0.5 + TAU * frac, 28, Color("9fd0ff"), 6.0, true)
+
+
+class SealMark extends Control:
+	var kind := "none"
+	func _draw() -> void:
+		var center := size * 0.5
+		var radius := minf(size.x, size.y) * 0.46
+		draw_circle(center, radius, Color("1c2430"))
+		draw_arc(center, radius - 1.5, 0, TAU, 28, Color("d6ff3f"), 3.0, true)
+		var ink := Color("f4f1ea")
+		match kind:
+			"cannon":
+				draw_rect(Rect2(center - Vector2(radius * 0.62, radius * 0.16), Vector2(radius * 1.24, radius * 0.32)), Color("ff7a32"))
+			"twin":
+				draw_rect(Rect2(center + Vector2(-radius * 0.55, -radius * 0.28), Vector2(radius * 1.1, radius * 0.18)), Color("ffb15a"))
+				draw_rect(Rect2(center + Vector2(-radius * 0.55, radius * 0.1), Vector2(radius * 1.1, radius * 0.18)), Color("ffb15a"))
+			"generator":
+				draw_polyline(PackedVector2Array([
+					center + Vector2(-radius * 0.12, -radius * 0.5),
+					center + Vector2(radius * 0.22, -radius * 0.02),
+					center + Vector2(-radius * 0.08, -radius * 0.02),
+					center + Vector2(radius * 0.16, radius * 0.5),
+				]), Color("d6ff3f"), 4.0)
+			"statue":
+				draw_circle(center + Vector2(0, -radius * 0.08), radius * 0.38, Color("c9b89a"))
+			"shield":
+				draw_colored_polygon(PackedVector2Array([
+					center + Vector2(0, -radius * 0.55),
+					center + Vector2(radius * 0.48, -radius * 0.2),
+					center + Vector2(radius * 0.32, radius * 0.5),
+					center + Vector2(0, radius * 0.28),
+					center + Vector2(-radius * 0.32, radius * 0.5),
+					center + Vector2(-radius * 0.48, -radius * 0.2),
+				]), Color("9fd0ff"))
+			"spike":
+				draw_arc(center, radius * 0.45, 0, TAU, 20, Color("ff5a3c"), 4.0, true)
+				draw_circle(center, radius * 0.16, Color("ff5a3c"))
+			"missile":
+				draw_colored_polygon(PackedVector2Array([
+					center + Vector2(radius * 0.55, 0),
+					center + Vector2(-radius * 0.15, -radius * 0.28),
+					center + Vector2(-radius * 0.4, 0),
+					center + Vector2(-radius * 0.15, radius * 0.28),
+				]), Color("ffd15a"))
+			"crystal":
+				draw_line(center + Vector2(-radius * 0.1, radius * 0.45), center + Vector2(radius * 0.15, -radius * 0.5), Color("7af0ff"), 5.0)
+			"crown":
+				draw_polyline(PackedVector2Array([
+					center + Vector2(-radius * 0.5, radius * 0.2),
+					center + Vector2(-radius * 0.28, -radius * 0.45),
+					center + Vector2(0, radius * 0.05),
+					center + Vector2(radius * 0.28, -radius * 0.45),
+					center + Vector2(radius * 0.5, radius * 0.2),
+				]), Color("e7c56a"), 4.0)
+			_:
+				draw_rect(Rect2(center - Vector2(radius * 0.5, radius * 0.18), Vector2(radius, radius * 0.36)), ink)

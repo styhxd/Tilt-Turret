@@ -61,7 +61,7 @@ func setup(def: Dictionary, wave: int, as_elite: bool, as_boss: bool = false) ->
 	attack_period = float(def.attack)
 	hit_radius = float(def.radius)
 	hp = float(def.hp) * (1.0 + float(wave - 1) * 0.12)
-	if GameState.heat:
+	if GameState.pact_shell:
 		hp *= 1.45
 		impulse *= 1.35
 	if boss:
@@ -76,6 +76,21 @@ func setup(def: Dictionary, wave: int, as_elite: bool, as_boss: bool = false) ->
 		hp *= 1.35
 		impulse *= 1.12
 	max_hp = hp
+	if elite and not boss:
+		var pip := MeshInstance3D.new()
+		var ball := SphereMesh.new()
+		ball.radius = 0.08
+		ball.height = 0.16
+		pip.mesh = ball
+		var pip_mat := StandardMaterial3D.new()
+		pip_mat.albedo_color = Color("ffd15a")
+		pip_mat.emission_enabled = true
+		pip_mat.emission = Color("ffd15a")
+		pip_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		pip.material_override = pip_mat
+		pip.position = Vector3(0.35, float(def.visual_height) + 0.2, 0)
+		pip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(pip)
 	_angle = randf() * TAU
 	_phase = randf() * TAU
 	var visual := ModelUtil.instantiate("creatures", kind)
@@ -235,6 +250,10 @@ func tick(dt: float, tower) -> void:
 		rotation.y = atan2(face.x, face.y)
 	if role == "bomb" and hp < max_hp * 0.45:
 		_ground_mark()
+
+
+func is_winding() -> bool:
+	return _windup > 0.02
 
 
 func clip_name() -> String:

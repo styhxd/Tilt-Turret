@@ -195,6 +195,11 @@ static func _no_shadow(node: Node) -> void:
 		mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 
 
+static func cast_on(node: Node) -> void:
+	for mi in _meshes(node):
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+
+
 static func _silence(node: Node) -> void:
 	for found in node.find_children("*", "AnimationPlayer", true, false):
 		var player := found as AnimationPlayer
