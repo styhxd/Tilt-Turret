@@ -45,6 +45,8 @@ var _over_menu: Button
 var _doubled := false
 var _shop_box: VBoxContainer
 var _labels: Array[Label] = []
+var _stage: Node3D
+var _diorama_cam: Camera3D
 
 
 func _ready() -> void:
@@ -68,6 +70,8 @@ func _connect_world() -> void:
 
 
 func _process(delta: float) -> void:
+	if _stage != null:
+		_stage.rotation.y += delta * 0.55
 	if _toast_life > 0.0:
 		_toast_life -= delta
 		if _toast_life <= 0.0:
@@ -108,25 +112,28 @@ func _build() -> void:
 	_drag.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_drag)
 
-	_splash = _full(Color("07080b"))
+	_splash = _full(Color("102033"))
 	var splash_title := _label("Tilt Turret", 84)
 	splash_title.set_anchors_preset(Control.PRESET_CENTER)
 	splash_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_splash.add_child(splash_title)
 	add_child(_splash)
 
-	_menu = _full(Color(0.04, 0.045, 0.06, 0.92))
+	_menu = _full(Color("102033"))
 	var menu_box := _column()
 	menu_box.set_anchors_preset(Control.PRESET_CENTER)
 	menu_box.offset_left = -420
 	menu_box.offset_right = 420
-	menu_box.offset_top = -520
-	menu_box.offset_bottom = 520
+	menu_box.offset_top = -780
+	menu_box.offset_bottom = 780
 	_title = _label("Tilt Turret", 78)
 	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_sub = _label("Stack & Defense", 32)
 	_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_sub.modulate = Color("d6ff3f")
+	menu_box.add_child(_title)
+	menu_box.add_child(_sub)
+	menu_box.add_child(_diorama_frame())
 	_best = _label("", 30)
 	_best.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_coins = _label("", 30)
@@ -137,10 +144,11 @@ func _build() -> void:
 	_play = _button("play", _on_play, true)
 	_mod_btn = _button("modules", _open_shop, false)
 	_set_btn = _button("settings", _open_settings, false)
-	for node in [_title, _sub, _best, _coins, _daily, _play, _mod_btn, _set_btn]:
+	for node in [_best, _coins, _daily, _play, _mod_btn, _set_btn]:
 		menu_box.add_child(node)
 	_menu.add_child(menu_box)
 	add_child(_menu)
+	_populate_diorama()
 
 	_hud = Control.new()
 	_hud.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -202,6 +210,14 @@ func _build_hud() -> void:
 	pause_b.offset_bottom = 120
 	_hud.add_child(pause_b)
 
+	var score_plate := Panel.new()
+	score_plate.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	score_plate.offset_left = -180
+	score_plate.offset_right = 180
+	score_plate.offset_top = 18
+	score_plate.offset_bottom = 108
+	score_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud.add_child(score_plate)
 	_score = _label("0", 48)
 	_score.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	_score.offset_top = 28
@@ -584,9 +600,21 @@ func _rebuild_shop() -> void:
 	_add_upgrade("cannon", "upgrade_cannon")
 	_add_upgrade("generator", "upgrade_generator")
 	for id in Catalog.modules().keys():
-		var line := _label("%s — %s" % [Locale.t("mod_" + id), Locale.t("desc_" + id)], 26)
-		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_shop_box.add_child(line)
+		var card := PanelContainer.new()
+		var inner := _label("%s\n%s" % [Locale.t("mod_" + id), Locale.t("desc_" + id)], 26)
+		inner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		card.add_child(inner)
+		var stripe := StyleBoxFlat.new()
+		stripe.bg_color = Color(ModelUtil.FALLBACK.get(id, Color.WHITE), 0.28)
+		stripe.set_corner_radius_all(18)
+		stripe.content_margin_left = 18
+		stripe.content_margin_right = 18
+		stripe.content_margin_top = 12
+		stripe.content_margin_bottom = 12
+		stripe.border_color = ModelUtil.FALLBACK.get(id, Color("d6ff3f"))
+		stripe.set_border_width_all(3)
+		card.add_theme_stylebox_override("panel", stripe)
+		_shop_box.add_child(card)
 	_shop_box.add_child(_button("close", _open_menu, false))
 
 
@@ -625,9 +653,24 @@ func _paint_queue() -> void:
 		var text := Locale.t("mod_" + id)
 		if bool(piece.epic):
 			text = Locale.t("epic") + "\n" + text
-		var chip := _label(text, 26)
-		chip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		chip.custom_minimum_size = Vector2(240, 88)
+		var chip := PanelContainer.new()
+		chip.custom_minimum_size = Vector2(250, 96)
+		var chip_label := _label(text, 26)
+		chip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		chip_label.add_theme_color_override("font_color", Color("14180f"))
+		chip.add_child(chip_label)
+		var chip_box := StyleBoxFlat.new()
+		var tint: Color = ModelUtil.FALLBACK.get(id, Color("d6ff3f"))
+		chip_box.bg_color = Color(tint.r, tint.g, tint.b, 0.92)
+		chip_box.set_corner_radius_all(18)
+		chip_box.content_margin_left = 12
+		chip_box.content_margin_right = 12
+		chip_box.content_margin_top = 8
+		chip_box.content_margin_bottom = 8
+		if bool(piece.epic):
+			chip_box.border_color = Color("d6ff3f")
+			chip_box.set_border_width_all(4)
+		chip.add_theme_stylebox_override("panel", chip_box)
 		_queue.add_child(chip)
 
 
@@ -711,6 +754,70 @@ func _chest_body() -> void:
 	pass
 
 
+func _diorama_frame() -> Control:
+	var frame := PanelContainer.new()
+	frame.custom_minimum_size = Vector2(760, 340)
+	var vp := SubViewport.new()
+	vp.size = Vector2i(760, 340)
+	vp.transparent_bg = true
+	vp.own_world_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	frame.add_child(vp)
+	var root := Node3D.new()
+	vp.add_child(root)
+	var env := WorldEnvironment.new()
+	var world_env := Environment.new()
+	world_env.background_mode = Environment.BG_COLOR
+	world_env.background_color = Color(0.08, 0.16, 0.24, 0)
+	world_env.ambient_light_color = Color("d5e6ff")
+	world_env.ambient_light_energy = 1.3
+	world_env.glow_enabled = true
+	world_env.glow_intensity = 0.4
+	env.environment = world_env
+	root.add_child(env)
+	var sun := DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-35, 30, 0)
+	sun.light_energy = 1.8
+	root.add_child(sun)
+	_diorama_cam = Camera3D.new()
+	_diorama_cam.position = Vector3(0, 1.25, 3.6)
+	_diorama_cam.fov = 38
+	root.add_child(_diorama_cam)
+	_stage = Node3D.new()
+	root.add_child(_stage)
+	var view := TextureRect.new()
+	view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	view.texture = vp.get_texture()
+	frame.add_child(view)
+	var plate := StyleBoxFlat.new()
+	plate.bg_color = Color("163044")
+	plate.set_corner_radius_all(28)
+	plate.border_color = Color("d6ff3f")
+	plate.set_border_width_all(4)
+	frame.add_theme_stylebox_override("panel", plate)
+	return frame
+
+
+func _populate_diorama() -> void:
+	if _stage == null or _diorama_cam == null:
+		return
+	var lineup := [
+		["modules", "05_kaiju_bust", 1.25, Vector3(0, 0, 0)],
+		["creatures", "01_ram_beetle", 0.72, Vector3(-1.15, 0, 0.35)],
+		["creatures", "02_smash_crab", 0.78, Vector3(1.15, 0, 0.2)],
+		["creatures", "04_manta_bat", 0.7, Vector3(0.15, 1.15, -0.2)],
+	]
+	for item in lineup:
+		var model := ModelUtil.instantiate(str(item[0]), str(item[1]))
+		_stage.add_child(model)
+		ModelUtil.fit(model, float(item[2]))
+		model.position = item[3]
+	_diorama_cam.look_at(Vector3(0, 0.45, 0))
+
+
 func _full(color: Color) -> ColorRect:
 	var rect := ColorRect.new()
 	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -790,9 +897,11 @@ func _theme() -> Theme:
 	theme.set_color("font_color", "PrimaryButton", Color("14180f"))
 	theme.set_color("font_hover_color", "PrimaryButton", Color("14180f"))
 	theme.set_color("font_pressed_color", "PrimaryButton", Color("14180f"))
-	var panel := _box(Color(0.05, 0.06, 0.08, 0.94), 0)
+	var panel := _box(Color(0.07, 0.14, 0.22, 0.94), 28)
 	theme.set_stylebox("panel", "Panel", panel)
 	theme.set_color("font_color", "Label", Color("f4f1ea"))
+	theme.set_constant("outline_size", "Label", 10)
+	theme.set_color("font_outline_color", "Label", Color("102033"))
 	return theme
 
 
@@ -800,6 +909,10 @@ func _box(color: Color, radius: int) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = color
 	style.set_corner_radius_all(radius)
+	style.border_color = Color("d6ff3f") if radius >= 28 else Color("3d5166")
+	style.set_border_width_all(4 if radius >= 28 else 2)
+	style.shadow_color = Color(0, 0, 0, 0.28)
+	style.shadow_size = 10
 	style.content_margin_left = 22
 	style.content_margin_right = 22
 	style.content_margin_top = 12
@@ -819,7 +932,8 @@ class LeanBar extends Control:
 	func _draw() -> void:
 		var w := size.x
 		var h := size.y
-		draw_rect(Rect2(Vector2.ZERO, size), Color("14181f"))
+		draw_rect(Rect2(Vector2.ZERO, size), Color("163044"), true)
+		draw_rect(Rect2(Vector2.ZERO, size), Color("d6ff3f"), false, 3.0)
 		var mag := 0.0
 		var signed := 0.0
 		if world != null and world.tower != null:
@@ -830,7 +944,8 @@ class LeanBar extends Control:
 			col = Color("f0c14a")
 		if mag >= 18.0:
 			col = Color("ff5a3c")
-		draw_rect(Rect2(w * 0.5 - 2, 0, 4, h), Color("3c4450"))
+		draw_line(Vector2(w * 0.5, 4), Vector2(w * 0.5, h - 4), Color("d6ff3f"), 3.0)
 		var t := clampf(signed / 28.0, -1.0, 1.0)
 		var x := w * 0.5 + t * w * 0.42
-		draw_rect(Rect2(x - 10, 2, 20, h - 4), col)
+		draw_circle(Vector2(x, h * 0.5), h * 0.42, col)
+		draw_circle(Vector2(x, h * 0.5), h * 0.22, Color("fff6c8"))

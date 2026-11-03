@@ -19,6 +19,17 @@ func _smoke(world: World) -> void:
 		push_error("catalog size")
 		get_tree().quit(2)
 		return
+	var beetle := ModelUtil.instantiate("creatures", "01_ram_beetle")
+	var player := beetle.find_child("AnimationPlayer", true, false)
+	var skeleton := beetle.find_child("Skeleton3D", true, false)
+	var bones := 0
+	if skeleton is Skeleton3D:
+		bones = (skeleton as Skeleton3D).get_bone_count()
+	print("RIG bones=", bones, " clips=", (player as AnimationPlayer).get_animation_list() if player else [])
+	if bones < 6:
+		push_error("creature rig missing")
+		get_tree().quit(3)
+		return
 	world.start_run(true)
 	world.add_yaw(0.9)
 	await get_tree().create_timer(0.15).timeout

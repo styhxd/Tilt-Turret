@@ -3,6 +3,8 @@ extends Node3D
 
 signal balance_hit
 signal collapsed
+signal landed
+signal struck
 
 const FALL_DEG := 28.0
 const DANGER_DEG := 18.0
@@ -224,6 +226,7 @@ func _lock_fall() -> void:
 	total_height += height
 	falling = false
 	_fall = null
+	landed.emit()
 	var after := _com_horizontal()
 	if after + 0.025 < before or (after < 0.055 and before < 0.1):
 		fire_buff = 2.6
@@ -284,6 +287,7 @@ func apply_hit(from: Vector3, power: float, height_ratio: float) -> void:
 		kick *= 0.25
 	vel_x += dir.x * kick
 	vel_z += dir.y * kick
+	struck.emit()
 	AudioDirector.play("hit")
 	AudioDirector.buzz(12)
 

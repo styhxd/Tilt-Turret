@@ -103,7 +103,11 @@ static func tint(node: Node3D, color: Color) -> void:
 			if dup is StandardMaterial3D:
 				var std := dup as StandardMaterial3D
 				std.albedo_color = color
-				std.roughness = maxf(std.roughness, 0.62)
+				std.roughness = 0.42
+				std.metallic = 0.08
+				std.emission_enabled = true
+				std.emission = Color(color.r, color.g, color.b, 1.0)
+				std.emission_energy_multiplier = 0.22
 				mi.set_surface_override_material(i, std)
 			elif dup is BaseMaterial3D:
 				(dup as BaseMaterial3D).albedo_color = color
@@ -144,6 +148,14 @@ static func _no_shadow(node: Node) -> void:
 
 
 static func _silence(node: Node) -> void:
-	for player in node.find_children("*", "AnimationPlayer", true, false):
-		player.active = false
-		player.stop()
+	for found in node.find_children("*", "AnimationPlayer", true, false):
+		var player := found as AnimationPlayer
+		player.active = true
+		for anim_name in player.get_animation_list():
+			var anim: Animation = player.get_animation(anim_name)
+			if anim_name == "attack":
+				anim.loop_mode = Animation.LOOP_NONE
+			else:
+				anim.loop_mode = Animation.LOOP_LINEAR
+		if player.has_animation("idle"):
+			player.play("idle")

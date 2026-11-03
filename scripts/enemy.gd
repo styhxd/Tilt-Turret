@@ -16,6 +16,11 @@ var elite := false
 var _attack := 0.0
 var _angle := 0.0
 var _phase := 0.0
+var _anim: AnimationPlayer
+var _base_scale := Vector3.ONE
+var _hit := 0.0
+var _dying := false
+var _visual: Node3D
 
 
 func setup(def: Dictionary, wave: int, as_elite: bool) -> void:
@@ -52,20 +57,34 @@ func setup(def: Dictionary, wave: int, as_elite: bool) -> void:
 		tint = palette[randi() % palette.size()]
 		scale = Vector3.ONE * randf_range(0.78, 1.14)
 	ModelUtil.tint(visual, tint)
+	_visual = visual
+	_base_scale = scale
+	_anim = visual.find_child("AnimationPlayer", true, false) as AnimationPlayer
+	_play("fly" if flying else "move")
 
 
 func take_damage(amount: float) -> void:
 	if dead:
 		return
 	hp -= amount
-	if hp <= 0.0:
+	_hit = 0.16
+	if hp <= 0.0 and not dead:
 		dead = true
+		_dying = true
 		died.emit()
 
 
 func tick(dt: float, tower) -> void:
+	_hit = maxf(_hit - dt, 0.0)
+	if _dying:
+		scale = scale.lerp(Vector3.ONE * 0.02, 1.0 - exp(-10.0 * dt))
+		position.y += dt * 0.8
+		if scale.x < 0.08:
+			queue_free()
+		return
 	if dead or not tower.alive:
 		return
+	scale = _base_scale * (1.0 + _hit * 1.8)
 	_attack -= dt
 	if flying:
 		_tick_fly(dt, tower)
@@ -83,6 +102,7 @@ func _tick_ground(dt: float, tower: Tower) -> void:
 		global_position.y = 0.0
 	elif _attack <= 0.0:
 		_attack = attack_period
+		_play("attack")
 		tower.apply_hit(global_position, impulse, height_ratio)
 
 
@@ -100,4 +120,21 @@ func _tick_fly(dt: float, tower: Tower) -> void:
 		global_position = target
 	if dist <= hit_radius + 0.35 and _attack <= 0.0:
 		_attack = attack_period
+		_play("attack")
 		tower.apply_hit(global_position, impulse, height_ratio)
+
+
+func _play(clip: String) -> void:
+	if _anim == null or not _anim.has_animation(clip):
+		return
+	if _anim.current_animation == clip and _anim.is_playing():
+		return
+	_anim.play(clip)
+	_anim.speed_scale = 1.35 if clip == "attack" else clampf(speed * 0.55, 0.8, 1.8)
+	if not _anim.animation_finished.is_connected(_on_anim_finished):
+		_anim.animation_finished.connect(_on_anim_finished)
+
+
+func _on_anim_finished(anim_name: StringName) -> void:
+	if anim_name == "attack" and not dead:
+		_play("fly" if flying else "move")

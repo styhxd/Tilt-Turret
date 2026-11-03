@@ -35,6 +35,9 @@ var _wind_cd := 7.0
 var _wind_left := 0.0
 var _wind_dir := Vector2.RIGHT
 var _best_ring: MeshInstance3D
+var _shake := 0.0
+var _sparks: Array[Dictionary] = []
+var _spark_pool: Array[MeshInstance3D] = []
 
 
 func _ready() -> void:
@@ -45,6 +48,8 @@ func _ready() -> void:
 	add_child(tower)
 	tower.balance_hit.connect(_on_balance)
 	tower.collapsed.connect(_on_collapsed)
+	tower.landed.connect(_on_landed)
+	tower.struck.connect(_on_struck)
 	_enemies = Node3D.new()
 	_enemies.name = "Enemies"
 	add_child(_enemies)
@@ -157,7 +162,9 @@ func _physics_process(delta: float) -> void:
 	tower.tick(delta, _enemies.get_children())
 	_shoot(tower.shots)
 	_bullets(delta)
+	_sparks_tick(delta)
 	_enemies_tick(delta)
+	_shake = move_toward(_shake, 0.0, delta * 2.8)
 	if _tutorial < 0 and not chest_open:
 		_waves(delta)
 		_wind(delta)
@@ -232,7 +239,8 @@ func _on_enemy_died(enemy: Enemy) -> void:
 	if enemy.dead:
 		kills += 1
 		AudioDirector.play("kill")
-		enemy.queue_free()
+		_burst(enemy.global_position + Vector3(0, 0.45, 0), Color("ffb15a"), 14)
+		_shake = maxf(_shake, 0.18)
 	if _tutorial == 2 and kills >= 1:
 		_finish_tutorial()
 
@@ -335,6 +343,7 @@ func _shoot(list: Array[Dictionary]) -> void:
 		dir = dir.normalized()
 		node.global_position = origin
 		node.visible = true
+		_burst(origin, Color("ffe08a"), 4)
 		var splash := float(shot.splash)
 		node.scale = Vector3.ONE * (1.7 if splash > 0.0 else 1.0)
 		_live.append({
@@ -379,6 +388,8 @@ func _touch_bullet(bullet: Dictionary) -> bool:
 						other.take_damage(float(bullet.damage))
 			else:
 				child.take_damage(float(bullet.damage))
+			_burst(node.global_position, Color("ff7a3c"), 8)
+			_shake = maxf(_shake, 0.08)
 			return true
 	return false
 
@@ -391,7 +402,8 @@ func _show_beam(a: Vector3, b: Vector3) -> void:
 	var length := maxf(a.distance_to(b), 0.2)
 	_beam.scale = Vector3(1, length, 1)
 	_beam.visible = true
-	_beam_life = 0.07
+	_beam_life = 0.12
+	_burst(b, Color("ffd27a"), 6)
 
 
 func _camera(delta: float) -> void:
@@ -412,6 +424,8 @@ func _place_camera(snap: bool, delta: float = 0.016) -> void:
 		_cam.rotation.z = dutch
 	else:
 		_cam.rotation.z = lerp(_cam.rotation.z, dutch, 1.0 - exp(-6.0 * delta))
+	if _shake > 0.0:
+		_cam.position += Vector3(randf_range(-1, 1), randf_range(-0.6, 0.6), randf_range(-1, 1)) * _shake
 
 
 func _best_marker() -> void:
@@ -425,21 +439,32 @@ func _build_scene() -> void:
 	var env := WorldEnvironment.new()
 	var world_env := Environment.new()
 	world_env.background_mode = Environment.BG_COLOR
-	world_env.background_color = Color("07080b")
+	world_env.background_color = Color("102033")
 	world_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	world_env.ambient_light_color = Color("8d93a0")
-	world_env.ambient_light_energy = 0.85
+	world_env.ambient_light_color = Color("c5d4ea")
+	world_env.ambient_light_energy = 1.15
 	world_env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	world_env.glow_enabled = true
+	world_env.glow_intensity = 0.55
+	world_env.glow_strength = 0.85
+	world_env.glow_bloom = 0.12
 	world_env.fog_enabled = true
-	world_env.fog_light_color = Color("07080b")
-	world_env.fog_density = 0.018
+	world_env.fog_light_color = Color("1a3348")
+	world_env.fog_density = 0.008
 	env.environment = world_env
 	add_child(env)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-46, 28, 0)
-	sun.light_energy = 1.35
+	sun.rotation_degrees = Vector3(-42, 32, 0)
+	sun.light_energy = 1.7
+	sun.light_color = Color("fff2d8")
 	sun.shadow_enabled = false
+	var rim := DirectionalLight3D.new()
+	rim.rotation_degrees = Vector3(-18, 200, 0)
+	rim.light_energy = 0.55
+	rim.light_color = Color("7ec8ff")
+	rim.shadow_enabled = false
+	add_child(rim)
 	add_child(sun)
 
 	_cam = Camera3D.new()
@@ -455,8 +480,11 @@ func _build_scene() -> void:
 	disc.height = 0.35
 	ground.mesh = disc
 	var dirt := StandardMaterial3D.new()
-	dirt.albedo_color = Color("14171c")
-	dirt.roughness = 0.94
+	dirt.albedo_color = Color("243044")
+	dirt.roughness = 0.72
+	dirt.emission_enabled = true
+	dirt.emission = Color("1a3a48")
+	dirt.emission_energy_multiplier = 0.35
 	ground.material_override = dirt
 	ground.position.y = -0.2
 	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -498,6 +526,9 @@ func _build_pool() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = Color("ff7a3c")
+	mat.emission_enabled = true
+	mat.emission = Color("ffb15a")
+	mat.emission_energy_multiplier = 2.4
 	for _i in 28:
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
@@ -514,10 +545,84 @@ func _build_pool() -> void:
 	_beam.mesh = cyl
 	var beam_mat := mat.duplicate()
 	beam_mat.albedo_color = Color("ffd27a")
+	beam_mat.emission_enabled = true
+	beam_mat.emission = Color("fff1c2")
+	beam_mat.emission_energy_multiplier = 3.0
 	_beam.material_override = beam_mat
 	_beam.visible = false
 	_beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_beam)
+	var spark_mesh := SphereMesh.new()
+	spark_mesh.radius = 0.08
+	spark_mesh.height = 0.16
+	for _i in 48:
+		var spark := MeshInstance3D.new()
+		spark.mesh = spark_mesh
+		var spark_mat := StandardMaterial3D.new()
+		spark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		spark_mat.emission_enabled = true
+		spark_mat.emission = Color("ffd27a")
+		spark_mat.emission_energy_multiplier = 2.0
+		spark_mat.albedo_color = Color("ffd27a")
+		spark.material_override = spark_mat
+		spark.visible = false
+		spark.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(spark)
+		_spark_pool.append(spark)
+
+
+func _on_landed() -> void:
+	_shake = maxf(_shake, 0.22)
+	_burst(Vector3(0, tower.total_height, 0), Color("d6ff3f"), 12)
+
+
+func _on_struck() -> void:
+	_shake = maxf(_shake, 0.28)
+
+
+func _burst(at: Vector3, color: Color, count: int) -> void:
+	for _i in count:
+		var node := _take_spark()
+		if node == null:
+			return
+		node.global_position = at
+		node.visible = true
+		node.scale = Vector3.ONE * randf_range(0.6, 1.4)
+		var mat := node.material_override as StandardMaterial3D
+		if mat:
+			mat.albedo_color = color
+			mat.emission = color
+		_sparks.append({
+			"node": node,
+			"vel": Vector3(randf_range(-2.2, 2.2), randf_range(1.2, 3.4), randf_range(-2.2, 2.2)),
+			"life": randf_range(0.28, 0.5),
+			"max": 0.5,
+		})
+
+
+func _sparks_tick(delta: float) -> void:
+	var i := 0
+	while i < _sparks.size():
+		var spark: Dictionary = _sparks[i]
+		spark.life = float(spark.life) - delta
+		var node: MeshInstance3D = spark.node
+		var vel: Vector3 = spark.vel
+		vel.y -= 6.0 * delta
+		spark.vel = vel
+		node.global_position += vel * delta
+		node.scale = Vector3.ONE * clampf(float(spark.life) / float(spark.max), 0.0, 1.0)
+		if float(spark.life) <= 0.0:
+			node.visible = false
+			_sparks.remove_at(i)
+		else:
+			i += 1
+
+
+func _take_spark() -> MeshInstance3D:
+	for mi in _spark_pool:
+		if not mi.visible:
+			return mi
+	return null
 
 
 func _take_bullet() -> MeshInstance3D:
