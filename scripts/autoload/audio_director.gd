@@ -8,6 +8,7 @@ var _high: AudioStreamPlayer
 var _cursor := 0
 var _combat := false
 var _danger := false
+var _boss_on := false
 var _started := false
 
 
@@ -22,12 +23,14 @@ func start() -> void:
 	_sfx["click"] = _tone(620.0, 70, 0.35, 18.0)
 	_sfx["drop"] = _noise(140, 0.45, 10.0)
 	_sfx["shoot"] = _glide(280.0, 140.0, 90, 0.3)
-	_sfx["cannon"] = _glide(240.0, 90.0, 140, 0.34)
-	_sfx["twin"] = _tone(980.0, 36, 0.22, 32.0)
-	_sfx["missile"] = _tone(68.0, 180, 0.4, 5.0)
-	_sfx["crystal"] = _tone(1040.0, 160, 0.2, 7.0)
-	_sfx["spike"] = _noise(80, 0.32, 20.0)
-	_sfx["crown"] = _glide(520.0, 760.0, 90, 0.22)
+	_sfx["cannon"] = _thump()
+	_sfx["twin"] = _ticks()
+	_sfx["missile"] = _glide(160.0, 680.0, 280, 0.34)
+	_sfx["crystal"] = _tone(1568.0, 160, 0.22, 5.0)
+	_sfx["spike"] = _noise(110, 0.4, 12.0)
+	_sfx["crown"] = _tone(880.0, 120, 0.24, 7.0)
+	_sfx["dry"] = _noise(45, 0.3, 34.0)
+	_sfx["slip"] = _noise(220, 0.46, 6.0)
 	_sfx["hit"] = _noise(90, 0.4, 16.0)
 	_sfx["kill"] = _tone(180.0, 120, 0.3, 8.0)
 	_sfx["balance"] = _arpeggio()
@@ -52,6 +55,10 @@ func _process(_delta: float) -> void:
 func set_mood(combat: bool, danger: bool) -> void:
 	_combat = combat
 	_danger = danger
+
+
+func set_boss(on: bool) -> void:
+	_boss_on = on
 
 
 func _loop_player(stream: AudioStream, volume: float) -> AudioStreamPlayer:
@@ -89,6 +96,12 @@ func _apply_layers() -> void:
 		if not _high.playing:
 			_high.play()
 		_high.volume_db = -10.0
+	elif _boss_on and not paused:
+		if not _high.playing:
+			_high.play()
+		_high.volume_db = -11.0
+		if drive_on:
+			_drive.volume_db = -8.0
 	else:
 		_high.volume_db = -80.0
 
@@ -175,50 +188,79 @@ func _arpeggio() -> AudioStreamWAV:
 	return _wav(data, rate, false)
 
 
-func _pad() -> AudioStreamWAV:
+func _thump() -> AudioStreamWAV:
 	var rate := 22050
-	var n := int(rate * 0.5)
+	var n := int(rate * 0.22)
+	var data := PackedByteArray()
+	data.resize(n * 2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 19
+	for i in n:
+		var t := float(i) / float(rate)
+		var env := exp(-t * 14.0)
+		var s := sin(TAU * 70.0 * t) * 0.45 + rng.randf_range(-1.0, 1.0) * 0.25
+		s *= env
+		data.encode_s16(i * 2, int(clampf(s, -1.0, 1.0) * 32767.0))
+	return _wav(data, rate, false)
+
+
+func _ticks() -> AudioStreamWAV:
+	var rate := 22050
+	var n := int(rate * 0.12)
 	var data := PackedByteArray()
 	data.resize(n * 2)
 	for i in n:
 		var t := float(i) / float(rate)
-		var s := sin(TAU * 55.0 * t) * 0.18 + sin(TAU * 82.5 * t) * 0.08
-		s *= 0.35 + 0.15 * sin(TAU * 0.5 * t)
+		var ping := 1.0 if t < 0.03 or (t > 0.06 and t < 0.09) else 0.0
+		var s := sin(TAU * 1400.0 * t) * ping * 0.28
 		data.encode_s16(i * 2, int(clampf(s, -1.0, 1.0) * 32767.0))
-	var wav := _wav(data, rate, true)
-	wav.loop_mode = AudioStreamWAV.LOOP_FORWARD
-	wav.loop_begin = 0
-	wav.loop_end = n
-	return wav
+	return _wav(data, rate, false)
+
+
+func _phrase(kind: String) -> AudioStreamWAV:
+	var rate := 11025
+	var beat := 60.0 / 96.0
+	var seconds := beat * 4.0 * 8.0
+	var n := int(rate * seconds)
+	var data := PackedByteArray()
+	data.resize(n * 2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11 if kind == "drive" else 4
+	var melody: Array[float] = [329.63, 392.0, 440.0, 493.88, 587.33, 493.88, 440.0, 392.0]
+	if kind == "danger":
+		melody = [329.63, 349.23, 440.0, 466.16, 349.23, 329.63, 311.13, 349.23]
+	for i in n:
+		var t := float(i) / float(rate)
+		var bar := int(t / (beat * 4.0)) % 8
+		var beat_pos := fmod(t, beat)
+		var s := 0.0
+		if kind == "pad":
+			var bass := 82.41 if bar % 2 == 0 else 123.47
+			s = sin(TAU * bass * t) * 0.24 + sin(TAU * bass * 1.5 * t) * 0.08
+		elif kind == "drive":
+			var step := int(t / beat)
+			var kick := 1.0 if beat_pos < 0.07 and step % 2 == 0 else 0.0
+			var hat := 1.0 if beat_pos > beat * 0.48 and beat_pos < beat * 0.48 + 0.025 else 0.0
+			s = sin(TAU * 78.0 * t) * kick * 0.5
+			s += rng.randf_range(-1.0, 1.0) * hat * 0.16
+		else:
+			var note := melody[bar]
+			var env := exp(-fmod(t, beat * 2.0) * 2.6)
+			s = sin(TAU * note * t) * env * 0.18
+		data.encode_s16(i * 2, int(clampf(s, -1.0, 1.0) * 32767.0))
+	return _wav(data, rate, true)
+
+
+func _pad() -> AudioStreamWAV:
+	return _phrase("pad")
 
 
 func _drive_bed() -> AudioStreamWAV:
-	var rate := 22050
-	var n := int(rate * 0.5)
-	var data := PackedByteArray()
-	data.resize(n * 2)
-	for i in n:
-		var t := float(i) / float(rate)
-		var beat := 1.0 if fmod(t, 0.5) < 0.08 else 0.0
-		var hat := 1.0 if fmod(t + 0.25, 0.5) < 0.03 else 0.0
-		var s := sin(TAU * 180.0 * t) * beat * 0.28
-		s += sin(TAU * 880.0 * t) * hat * 0.08
-		s += sin(TAU * 330.0 * t) * 0.05
-		data.encode_s16(i * 2, int(clampf(s, -1.0, 1.0) * 32767.0))
-	return _wav(data, rate, true)
+	return _phrase("drive")
 
 
 func _high_bed() -> AudioStreamWAV:
-	var rate := 22050
-	var n := int(rate * 0.5)
-	var data := PackedByteArray()
-	data.resize(n * 2)
-	for i in n:
-		var t := float(i) / float(rate)
-		var s := sin(TAU * 740.0 * t) * 0.08 + sin(TAU * 988.0 * t) * 0.05
-		s *= 0.6 + 0.4 * sin(TAU * 2.0 * t)
-		data.encode_s16(i * 2, int(clampf(s, -1.0, 1.0) * 32767.0))
-	return _wav(data, rate, true)
+	return _phrase("danger")
 
 
 func _wav(data: PackedByteArray, rate: int, looped: bool) -> AudioStreamWAV:

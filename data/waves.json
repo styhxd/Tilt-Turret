@@ -1,6 +1,6 @@
 [
   {"wave": 1, "card": "wave_beetles", "groups": [{"id": "01_ram_beetle", "count": 3, "elite": false}]},
-  {"wave": 2, "card": "wave_beetles", "groups": [{"id": "01_ram_beetle", "count": 4, "elite": false}]},
+  {"wave": 2, "card": "wave_beetles_4", "groups": [{"id": "01_ram_beetle", "count": 4, "elite": false}]},
   {"wave": 3, "card": "wave_crab", "groups": [{"id": "02_smash_crab", "count": 1, "elite": false}, {"id": "01_ram_beetle", "count": 2, "elite": false}]},
   {"wave": 4, "card": "wave_manta", "groups": [{"id": "04_manta_bat", "count": 2, "elite": false}, {"id": "01_ram_beetle", "count": 2, "elite": false}]},
   {"wave": 5, "card": "wave_boss", "boss": "02_smash_crab", "groups": [{"id": "03_iron_slug", "count": 1, "elite": false}]},

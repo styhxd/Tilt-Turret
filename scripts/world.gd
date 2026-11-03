@@ -6,8 +6,11 @@ signal chest_ready
 signal tutorial_step(step: int)
 signal wind_warning(dir: Vector2)
 signal wave_card(text: String)
+signal lineup(ids: Array)
 signal wave_clear(text: String)
 signal mutation_ready
+signal relic_ready
+signal victory
 signal boss_changed(ratio: float)
 
 var tower: Tower
@@ -21,6 +24,14 @@ var last_earned := 0
 var chest_open := false
 var tutorial_mode := false
 var queue: Array[Dictionary] = []
+var held: Dictionary = {}
+var chapter := "meadow"
+var endless := false
+var run_coins := 0
+var net_kills := 0
+var won := false
+var relic_offer: Array[String] = []
+var wind_preview := Vector2.ZERO
 
 var _enemies: Node3D
 var _cam: Camera3D
@@ -66,6 +77,11 @@ var tick_pushes := 0
 var _fx: Node3D
 var _meshes: Dictionary = {}
 var _rings: Array[Dictionary] = []
+var _breath := 0.0
+var _relic_pending := false
+var _awaiting_relic := false
+var _gen_offered := false
+var _banked := false
 
 
 func _ready() -> void:
@@ -78,6 +94,8 @@ func _ready() -> void:
 	tower.collapsed.connect(_on_collapsed)
 	tower.landed.connect(_on_landed)
 	tower.struck.connect(_on_struck)
+	tower.slipped.connect(_on_slipped)
+	tower.deflected.connect(_on_deflected)
 	_enemies = Node3D.new()
 	_enemies.name = "Enemies"
 	add_child(_enemies)
@@ -87,7 +105,7 @@ func _ready() -> void:
 	_build_pool()
 
 
-func start_run(is_tutorial: bool) -> void:
+func start_run(is_tutorial: bool, chapter_name: String = "meadow") -> void:
 	_clear_enemies()
 	_clear_bullets()
 	wave = 1
@@ -98,6 +116,14 @@ func start_run(is_tutorial: bool) -> void:
 	last_earned = 0
 	chest_open = false
 	tutorial_mode = is_tutorial
+	chapter = chapter_name
+	endless = false
+	run_coins = 0
+	net_kills = 0
+	won = false
+	held = {}
+	relic_offer.clear()
+	wind_preview = Vector2.ZERO
 	_light_streak = 0
 	_next_epic = false
 	_pending_daily = false
@@ -111,6 +137,11 @@ func start_run(is_tutorial: bool) -> void:
 	_clear_sent = false
 	_hitstop = 0.0
 	_awaiting_choice = false
+	_awaiting_relic = false
+	_relic_pending = false
+	_breath = 0.0
+	_gen_offered = false
+	_banked = false
 	_boss = null
 	_script.clear()
 	queue.clear()
@@ -130,28 +161,30 @@ func start_run(is_tutorial: bool) -> void:
 	if is_tutorial:
 		_tutorial = 0
 		_yaw_mark = tower.yaw
-		queue[0] = {"id": "05_kaiju_bust", "epic": false}
+		held = {"id": "05_kaiju_bust", "epic": false}
+		queue.clear()
 		_pending_daily = daily
 		tutorial_step.emit(0)
 	else:
 		_tutorial = -1
-		if daily and queue.size() > 0:
+		if daily and not queue.is_empty():
 			queue[0].epic = true
 	_sync_ghost()
 	_place_camera(true)
+	_biome = -1
 	if not is_tutorial:
 		_arm_wave()
 
 
 func request_drop() -> bool:
-	if not running or chest_open or queue.is_empty():
+	if not running or chest_open or held.is_empty() or _awaiting_relic:
 		return false
 	if _tutorial == 0:
 		return false
-	var piece: Dictionary = queue[0]
+	var piece: Dictionary = held
 	if not tower.drop(str(piece.id), bool(piece.epic)):
 		return false
-	queue.pop_front()
+	held = {}
 	_fill_queue()
 	_sync_ghost()
 	if _tutorial == 1:
@@ -193,7 +226,10 @@ func apply_freeze() -> void:
 
 func grant_epic() -> void:
 	_next_epic = true
-	if queue.size() > 0:
+	if not held.is_empty():
+		held.epic = true
+		_next_epic = false
+	elif not queue.is_empty():
 		queue[0].epic = true
 		_next_epic = false
 	_sync_ghost()
@@ -201,7 +237,10 @@ func grant_epic() -> void:
 
 func close_chest() -> void:
 	chest_open = false
-	_advance_wave()
+	if _is_finale():
+		_win()
+	else:
+		_start_breath()
 
 
 func revive_run() -> void:
@@ -231,7 +270,7 @@ func _physics_process(delta: float) -> void:
 	_fx_tick(delta)
 	_enemies_tick(delta)
 	_shake = move_toward(_shake, 0.0, delta * 2.8)
-	if _tutorial < 0 and not chest_open and not _awaiting_choice:
+	if _tutorial < 0 and not chest_open and not _awaiting_choice and not _awaiting_relic:
 		_waves(delta)
 		_wind(delta)
 	_sync_ghost()
@@ -242,21 +281,23 @@ func _physics_process(delta: float) -> void:
 	var danger := tower.tilt_deg() >= 18.0
 	var combat := _enemies.get_child_count() > 0 and _tutorial < 0
 	AudioDirector.set_mood(combat, danger)
+	AudioDirector.set_boss(_boss != null and is_instance_valid(_boss) and not _boss.dead)
 	_camera(delta)
 	_best_marker()
 	score = tower.height_blocks() * 10 + kills * 5 + balance_hits * 10
 
 
 func _waves(delta: float) -> void:
+	if _breath > 0.0:
+		_breath -= delta
+		if _breath <= 0.0:
+			_finish_breath()
+		return
 	var duration := 16.0 + float(wave) * 1.2
 	if _clear_left > 0.0:
 		_clear_left -= delta
 		if _clear_left <= 0.0:
-			if wave % 3 == 0:
-				chest_open = true
-				chest_ready.emit()
-			else:
-				_advance_wave()
+			_after_clear()
 		return
 	if _card_left > 0.0:
 		_card_left -= delta
@@ -277,6 +318,142 @@ func _waves(delta: float) -> void:
 		wave_clear.emit("%s %d   %s %d\n%s" % [Locale.t("height"), tower.height_blocks(), Locale.t("kills"), kills, next_name])
 
 
+func _after_clear() -> void:
+	if _relic_pending:
+		_relic_pending = false
+		_open_relics()
+		return
+	if wave % 3 == 0:
+		chest_open = true
+		chest_ready.emit()
+		return
+	if _is_finale():
+		_win()
+		return
+	_start_breath()
+
+
+func _is_finale() -> bool:
+	return wave >= 10 and not endless
+
+
+func _start_breath() -> void:
+	_breath = 3.2
+	var upcoming := Catalog.wave_script(wave + 1)
+	var key := str(upcoming.get("card", "wave_mixed")) if not upcoming.is_empty() else "wave_mixed"
+	wave_card.emit(Locale.t("breath") % Locale.t(key))
+	lineup.emit(_lineup_ids(upcoming))
+
+
+func _finish_breath() -> void:
+	_breath = 0.0
+	wind_preview = Vector2.ZERO
+	_advance_wave()
+
+
+func call_wave() -> void:
+	if _breath <= 0.0 or not running:
+		return
+	run_coins += 6
+	_breath = 0.0
+	_finish_breath()
+
+
+func choose_offer(index: int) -> void:
+	if not running or not held.is_empty():
+		return
+	if index < 0 or index >= queue.size():
+		return
+	held = queue[index]
+	queue.clear()
+	_sync_ghost()
+	AudioDirector.play("click")
+
+
+func _open_relics() -> void:
+	relic_offer.clear()
+	var pool: Array[String] = []
+	for id in Catalog.RELICS:
+		if not tower.relics.has(id):
+			pool.append(id)
+	pool.shuffle()
+	for i in mini(3, pool.size()):
+		relic_offer.append(pool[i])
+	if relic_offer.is_empty():
+		if _is_finale():
+			_win()
+		else:
+			_start_breath()
+		return
+	_awaiting_relic = true
+	relic_ready.emit()
+
+
+func pick_relic(which: int) -> void:
+	if which < 0 or which >= relic_offer.size():
+		return
+	var id := relic_offer[which]
+	var cap := 2 if GameState.toy_relic else 1
+	if not tower.relics.has(id):
+		if tower.relics.size() < cap:
+			tower.relics.append(id)
+		elif not tower.relics.is_empty():
+			tower.relics[tower.relics.size() - 1] = id
+	_awaiting_relic = false
+	relic_offer.clear()
+	AudioDirector.play("click")
+	if _is_finale():
+		_win()
+	else:
+		_start_breath()
+
+
+func continue_endless() -> void:
+	endless = true
+	won = false
+	running = true
+	run_coins = 0
+	_banked = false
+	last_earned = 0
+	_clear_sent = false
+	_breath = 0.4
+
+
+func _win() -> void:
+	if won:
+		return
+	_bank(true)
+	won = true
+	running = false
+	if chapter == "meadow":
+		GameState.dusk_open = true
+		GameState.save_game()
+	victory.emit()
+
+
+func _bank(victory_bonus: bool) -> void:
+	if _banked:
+		return
+	_banked = true
+	var lump := tower.height_blocks() + kills * 2 + balance_hits
+	if victory_bonus:
+		lump += 40
+	var purse := run_coins
+	if GameState.heat:
+		lump *= 2
+		purse *= 2
+	last_earned = lump + purse
+	GameState.coins += last_earned
+	var height := tower.height_blocks()
+	if height > GameState.best_height:
+		GameState.best_height = height
+	if kills > GameState.best_kills:
+		GameState.best_kills = kills
+	if score > GameState.best_score:
+		GameState.best_score = score
+	GameState.save_game()
+
+
 func _advance_wave() -> void:
 	wave += 1
 	_wave_time = 0.0
@@ -289,10 +466,6 @@ func _arm_wave() -> void:
 	_script.clear()
 	_card_pending = true
 	_boss = null
-	if wave % 3 == 0 and wave != _choice_wave:
-		_awaiting_choice = true
-		mutation_ready.emit()
-		return
 	var script := Catalog.wave_script(wave)
 	if script.is_empty() and wave % 5 == 0:
 		script = {"card": "wave_boss", "boss": "02_smash_crab", "groups": [{"id": "01_ram_beetle", "count": 3, "elite": false}]}
@@ -339,6 +512,19 @@ func _announce() -> void:
 	if script.is_empty() and wave % 5 == 0:
 		key = "wave_boss"
 	wave_card.emit(Locale.t(key))
+	lineup.emit(_lineup_ids(script))
+
+
+func _lineup_ids(script: Dictionary) -> Array:
+	var ids: Array = []
+	if script.has("boss"):
+		ids.append({"id": str(script.boss), "boss": true, "elite": true})
+	for group in script.get("groups", []):
+		var count := int(group.get("count", 1))
+		var elite := bool(group.get("elite", false))
+		for _i in count:
+			ids.append({"id": str(group.get("id", "01_ram_beetle")), "boss": false, "elite": elite})
+	return ids
 
 
 func _next_threat() -> String:
@@ -355,12 +541,14 @@ func _wind(delta: float) -> void:
 		_wind_left -= delta
 		if _wind_left <= 0.0:
 			tower.apply_wind(_wind_dir, 0.2 + float(wave) * 0.012)
+			wind_preview = Vector2.ZERO
 		return
 	_wind_cd -= delta
 	if _wind_cd <= 0.0:
 		_wind_dir = Vector2.from_angle(randf() * TAU)
 		_wind_left = 1.0
 		_wind_cd = 8.5
+		wind_preview = _wind_dir
 		wind_warning.emit(_wind_dir)
 
 
@@ -382,19 +570,25 @@ func _spawn(id: String, elite: bool, as_boss: bool = false) -> void:
 		return
 	var enemy := Enemy.new()
 	_enemies.add_child(enemy)
-	enemy.setup(def, wave, elite, as_boss)
+	var lane := randf_range(-1.15, 1.15)
+	var chapter_def := def.duplicate()
+	if chapter == "dusk":
+		chapter_def["chapter"] = "dusk"
+	enemy.setup(chapter_def, wave, elite, as_boss)
 	if as_boss:
 		_boss = enemy
 		bosses_spawned += 1
 		boss_changed.emit(1.0)
-	var lane := randf_range(-1.35, 1.35)
-	enemy.position = Vector3(lane, 1.15 if enemy.flying else 0.0, -8.6)
+	enemy.position = Vector3(lane, 1.35 if enemy.flying else 0.05, -6.2)
 	enemy.died.connect(_on_enemy_died.bind(enemy))
 
 
 func _on_enemy_died(enemy: Enemy) -> void:
 	if enemy.dead:
 		kills += 1
+		run_coins += 1
+		if tower.any_powered():
+			net_kills += 1
 		AudioDirector.play("kill")
 		_burst(enemy.global_position + Vector3(0, 0.45, 0), Color("ffb15a"), 14)
 		_shake = maxf(_shake, 0.34 if enemy.boss or enemy.elite else 0.18)
@@ -406,9 +600,7 @@ func _on_enemy_died(enemy: Enemy) -> void:
 		if enemy.boss:
 			_boss = null
 			boss_changed.emit(0.0)
-			if not chest_open:
-				chest_open = true
-				chest_ready.emit()
+			_relic_pending = true
 	if _tutorial == 2 and kills >= 1:
 		_finish_tutorial()
 
@@ -418,10 +610,14 @@ func _finish_tutorial() -> void:
 	tutorial_mode = false
 	GameState.tutorial_done = true
 	GameState.save_game()
-	if _pending_daily and queue.size() > 0:
+	if _pending_daily and not queue.is_empty():
 		queue[0].epic = true
 		_pending_daily = false
 		_sync_ghost()
+	if held.is_empty():
+		queue.clear()
+		_light_streak = 0
+		_fill_queue()
 	tutorial_step.emit(3)
 	_spawn_cd = 1.6
 	_arm_wave()
@@ -450,8 +646,32 @@ func _enemies_tick(delta: float) -> void:
 
 
 func _fill_queue() -> void:
+	if not held.is_empty():
+		return
 	while queue.size() < 3:
 		queue.append(_roll())
+	if _tutorial >= 0:
+		return
+	var has_gun := false
+	var has_heavy := false
+	var has_gen := false
+	for piece in queue:
+		var id := str(piece.id)
+		if id in ["02_side_cannon", "03_twin_guns"]:
+			has_gun = true
+		if id in Catalog.HEAVY_IDS:
+			has_heavy = true
+		if id == "04_generator":
+			has_gen = true
+	if wave <= 2 and not has_gun:
+		queue[0] = {"id": "02_side_cannon", "epic": bool(queue[0].get("epic", false))}
+	if wave <= 2 and not has_heavy and queue.size() > 1:
+		queue[1] = {"id": "05_kaiju_bust", "epic": false}
+	if wave >= 2 and not _gen_offered and not has_gen and queue.size() > 2:
+		queue[2] = {"id": "04_generator", "epic": false}
+		_gen_offered = true
+	elif has_gen:
+		_gen_offered = true
 
 
 func _roll() -> Dictionary:
@@ -470,41 +690,47 @@ func _roll() -> Dictionary:
 
 
 func _sync_ghost() -> void:
-	if queue.is_empty() or not running:
+	if held.is_empty() or not running:
 		tower.show_ghost("")
 		return
-	tower.show_ghost(str(queue[0].id))
+	tower.show_ghost(str(held.id))
 
 
 func _on_balance() -> void:
 	balance_hits += 1
+	run_coins += 5
 	var color := Color("d8ff6a") if tower.perfect_chain > 1 else Color("9cff6a")
 	_burst(Vector3(0, tower.total_height, 0), color, 10 + tower.perfect_chain * 4)
 	_shake = maxf(_shake, 0.16 + float(tower.perfect_chain) * 0.04)
 
 
+func _on_slipped() -> void:
+	AudioDirector.play("slip")
+	_shake = maxf(_shake, 0.2)
+
+
+func _on_deflected(dir: Vector3) -> void:
+	for node in _enemies.get_children():
+		if node is Enemy and not node.dead and node.global_position.length() < 3.4:
+			node.global_position += dir.normalized() * 0.85
+
+
 func _on_collapsed() -> void:
-	if not running and last_earned > 0 and not tower.alive:
+	if won:
+		return
+	if not running and _banked:
 		return
 	running = false
-	last_earned = tower.height_blocks() + kills * 2 + balance_hits
-	if GameState.heat:
-		last_earned *= 2
-	GameState.coins += last_earned
-	var height := tower.height_blocks()
-	if height > GameState.best_height:
-		GameState.best_height = height
-	if kills > GameState.best_kills:
-		GameState.best_kills = kills
-	if score > GameState.best_score:
-		GameState.best_score = score
-	GameState.save_game()
+	_bank(false)
 	fell.emit()
 
 
 func _shoot(list: Array[Dictionary]) -> void:
 	for shot in list:
 		var style := str(shot.get("style", "cannon"))
+		if style == "dry" or bool(shot.get("dry", false)) and float(shot.speed) <= 0.0:
+			_burst(shot.from, Color("8a9098"), 4)
+			continue
 		if style == "spike":
 			_pulse(shot.to, Color("e7ff9a"))
 			continue
@@ -595,8 +821,10 @@ func _touch_bullet(bullet: Dictionary) -> bool:
 				_explode(node.global_position, style)
 			else:
 				child.take_damage(float(bullet.damage), 0.0)
-				_burst(node.global_position, _style_color(style), 6)
-			_shake = maxf(_shake, 0.12 if style == "cannon" else 0.06)
+				_burst(node.global_position, _style_color(style), 8 if style != "twin" else 4)
+			if style == "crown":
+				child.marked = 2.6
+			_shake = maxf(_shake, 0.2 if style == "cannon" else 0.08)
 			return true
 	return false
 
@@ -705,19 +933,22 @@ func _camera(delta: float) -> void:
 
 
 func _place_camera(snap: bool, delta: float = 0.016) -> void:
-	var look_y := clampf(1.45 + tower.total_height * 0.28, 1.45, 9.0)
-	var dist := 10.0 + tower.total_height * 0.4
-	var want := Vector3(0.15, look_y + 3.5, dist)
+	var look_y := clampf(1.05 + tower.total_height * 0.22, 1.05, 6.5)
+	var dist := 6.6 + tower.total_height * 0.26
+	var want := Vector3(0.25, look_y + 1.35, dist)
 	if snap:
 		_cam.position = want
 	else:
 		_cam.position = _cam.position.lerp(want, 1.0 - exp(-3.2 * delta))
-	_cam.look_at(Vector3(0, look_y, 0))
-	var dutch := clampf(-deg_to_rad(tower.tilt_signed_deg()) * 0.28, -0.14, 0.14)
+	_cam.look_at(Vector3(0, look_y * 0.72, -1.5))
+	var dutch := clampf(-deg_to_rad(tower.tilt_x) * 0.55, -0.2, 0.2)
+	var pitch := clampf(deg_to_rad(tower.tilt_z) * 0.28, -0.12, 0.12)
 	if snap:
 		_cam.rotation.z = dutch
+		_cam.rotation.x += pitch
 	else:
-		_cam.rotation.z = lerp(_cam.rotation.z, dutch, 1.0 - exp(-6.0 * delta))
+		_cam.rotation.z = lerpf(_cam.rotation.z, dutch, 1.0 - exp(-6.0 * delta))
+		_cam.rotation.x += pitch * 0.35
 	if _shake > 0.0:
 		_cam.position += Vector3(randf_range(-1, 1), randf_range(-0.6, 0.6), randf_range(-1, 1)) * _shake
 
@@ -769,6 +1000,8 @@ func _apply_biome(wave_n: int) -> void:
 		index = 2
 	elif wave_n >= 5:
 		index = 1
+	if chapter == "dusk":
+		index = maxi(index, 1)
 	if index == _biome or _env == null or _ground == null:
 		return
 	_biome = index
@@ -796,7 +1029,7 @@ func _apply_biome(wave_n: int) -> void:
 	if sky is Texture2D:
 		var panorama := PanoramaSkyMaterial.new()
 		panorama.panorama = sky
-		panorama.energy_multiplier = 1.35 if index == 0 else 1.05
+		panorama.energy_multiplier = 1.0 if index == 0 else 1.05
 		var sky_res := Sky.new()
 		sky_res.sky_material = panorama
 		_env.background_mode = Environment.BG_SKY
@@ -840,7 +1073,7 @@ func _build_grass() -> void:
 	while i < 220:
 		var x := randf_range(-7.5, 7.5)
 		var z := randf_range(-8.5, 6.5)
-		if absf(x) < 1.5 and z < -0.4 and z > -8.2:
+		if absf(x) < 1.9 and z < 0.2 and z > -7.4:
 			x = 1.7 if x >= 0.0 else -1.7
 		var xf := Transform3D(Basis(Vector3.UP, randf() * TAU), Vector3(x, 0.19, z))
 		multi.set_instance_transform(i, xf)
@@ -900,9 +1133,9 @@ func _build_scene() -> void:
 	world_env.ambient_light_energy = 1.15
 	world_env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	world_env.glow_enabled = true
-	world_env.glow_intensity = 0.55
-	world_env.glow_strength = 0.85
-	world_env.glow_bloom = 0.12
+	world_env.glow_intensity = 0.22
+	world_env.glow_strength = 0.55
+	world_env.glow_bloom = 0.04
 	world_env.fog_enabled = true
 	world_env.fog_light_color = Color("c5e4f6")
 	world_env.fog_density = 0.003

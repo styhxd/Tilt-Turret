@@ -187,12 +187,97 @@ func _smoke(world: World) -> void:
 		push_error("light streak")
 		get_tree().quit(11)
 		return
+	if str(Catalog.wave_script(2).get("card", "")) != "wave_beetles_4":
+		push_error("wave 2 card")
+		get_tree().quit(12)
+		return
+	world.held = {}
+	world.queue.clear()
+	world._tutorial = -1
+	world.wave = 1
+	world.running = true
+	world._gen_offered = false
+	world._fill_queue()
+	if world.queue.size() != 3:
+		push_error("offer size")
+		get_tree().quit(13)
+		return
+	var saw_gun := false
+	var saw_heavy := false
+	for piece in world.queue:
+		var oid := str(piece.id)
+		if oid in ["02_side_cannon", "03_twin_guns"]:
+			saw_gun = true
+		if oid in Catalog.HEAVY_IDS:
+			saw_heavy = true
+	if not saw_gun or not saw_heavy:
+		push_error("offer bias")
+		get_tree().quit(13)
+		return
+	world.choose_offer(0)
+	if not world.queue.is_empty() or world.held.is_empty():
+		push_error("offer pick")
+		get_tree().quit(13)
+		return
+	world.tower.begin(1.0, 1.0, 1.0, false)
+	world.tower._place_now("05_kaiju_bust", false)
+	world.tower._place_now("02_side_cannon", false)
+	world.tower._tick_energy(0.6)
+	if bool(world.tower.stack[2].get("lit", false)):
+		push_error("cannon lit through statue")
+		get_tree().quit(14)
+		return
+	world.tower._place_now("04_generator", false)
+	world.tower._tick_energy(0.5)
+	if not bool(world.tower.stack[2].get("lit", false)):
+		push_error("cannon dark beside generator")
+		get_tree().quit(14)
+		return
+	world.tower._place_now("09_crystal_spur", false)
+	world.tower._tick_energy(0.2)
+	if world.tower.wire_count() < 1:
+		push_error("wire")
+		get_tree().quit(14)
+		return
+	var z_before := world.tower.vel_z
+	world.tower.apply_hit(Vector3(0, 0, -3), 3.0, 0.2)
+	if absf(world.tower.vel_z - z_before) < 0.01:
+		push_error("z shove")
+		get_tree().quit(15)
+		return
+	var dusk_was := GameState.dusk_open
+	var coins_was := GameState.coins
+	world.running = true
+	world.won = false
+	world._banked = false
+	world.endless = false
+	world.chapter = "meadow"
+	world.wave = 10
+	world._tutorial = -1
+	world._relic_pending = false
+	world._awaiting_relic = false
+	world.chest_open = false
+	world._breath = 0.0
+	world._clear_sent = true
+	world._clear_left = 0.05
+	world._card_left = 0.0
+	world._card_pending = false
+	world._waves(0.1)
+	if not world.won:
+		push_error("victory")
+		get_tree().quit(16)
+		return
+	GameState.dusk_open = dusk_was
+	GameState.coins = coins_was
+	GameState.save_game()
 	print("SMOKE_OK")
 	get_tree().quit(0)
 
 
 func _shots(world: World, ui: UiRoot) -> void:
 	await get_tree().create_timer(0.6).timeout
+	GameState.dusk_open = false
+	ui._refresh_copy()
 	_grab("menu")
 	ui._start(true)
 	world.tower.set_stud(1)
@@ -203,14 +288,55 @@ func _shots(world: World, ui: UiRoot) -> void:
 	world._tutorial = -1
 	ui._tutorial.visible = false
 	world._spawn("01_ram_beetle", false)
+	var early := world._enemies.get_child(world._enemies.get_child_count() - 1)
+	if early is Node3D:
+		early.position = Vector3(0.0, 0.15, -2.6)
+		early.rotation.y = PI
 	if world.tower._ghost:
 		world.tower._ghost.visible = false
-	var bug := world._enemies.get_child(world._enemies.get_child_count() - 1)
-	if bug is Node3D:
-		bug.position = Vector3(0.0, 0.0, -3.1)
-		bug.rotation.y = 0.0
 	await get_tree().create_timer(0.35).timeout
 	_grab("path")
+	if early is Node3D:
+		early.visible = false
+	world.held = {}
+	world.queue.clear()
+	world.wave = 2
+	world._gen_offered = false
+	world._fill_queue()
+	await get_tree().create_timer(0.25).timeout
+	_grab("offer")
+	world.choose_offer(0)
+	await get_tree().create_timer(0.25).timeout
+	_grab("held")
+	world.held = {}
+	ui._queue_sig = ""
+	ui._paint_queue()
+	if world.tower._ghost:
+		world.tower._ghost.visible = false
+	world.tower._place_now("05_kaiju_bust", false)
+	world.tower._place_now("02_side_cannon", false)
+	world.tower._tick_energy(0.05)
+	await get_tree().create_timer(0.15).timeout
+	_grab("dark")
+	world.tower._place_now("04_generator", false)
+	world.tower._place_now("09_crystal_spur", false)
+	world.tower._tick_energy(0.45)
+	await get_tree().create_timer(0.2).timeout
+	_grab("lit")
+	world.wave = 1
+	world._start_breath()
+	await get_tree().create_timer(0.2).timeout
+	_grab("wave")
+	get_tree().paused = true
+	world.tower.tilt_z = 0.34
+	world.tower.tilt_x = 0.05
+	ui._meter.queue_redraw()
+	await get_tree().create_timer(0.05, true).timeout
+	_grab("bubble")
+	get_tree().paused = false
+	ui._on_victory()
+	await get_tree().create_timer(0.2).timeout
+	_grab("victory")
 	get_tree().quit(0)
 
 

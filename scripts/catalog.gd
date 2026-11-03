@@ -97,3 +97,34 @@ static func weapon_of(id: String) -> Dictionary:
 	if not WEAPONS.has(key):
 		return {}
 	return WEAPONS[key]
+
+
+static func seal_key(id: String) -> String:
+	var key := str(module(id).get("weapon", "none"))
+	match key:
+		"generator", "crystal", "crown":
+			return "seal_conduct"
+		"cannon", "twin", "missile":
+			return "seal_shoot"
+		"spike":
+			return "seal_bite"
+		"shield":
+			return "seal_shield"
+		_:
+			if id == "05_kaiju_bust":
+				return "seal_weigh"
+			return "seal_conduct"
+
+
+const ENERGY_COST := {
+	"cannon": 2.0,
+	"twin": 1.0,
+	"missile": 4.0,
+	"crown": 1.0,
+	"crystal": 1.0,
+	"spike": 0.0,
+}
+
+const RELICS: Array[String] = [
+	"long_line", "alchemist", "crown_mark", "magnet", "thirsty", "reflect",
+]

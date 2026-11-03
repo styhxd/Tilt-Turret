@@ -49,6 +49,13 @@ var _banner: Label
 var _banner_life := 0.0
 var _choice: Control
 var _heat_btn: Button
+var _flag: Button
+var _purse: Label
+var _boss_label: Label
+var _lineup: HBoxContainer
+var _endless_btn: Button
+var _dusk_btn: Button
+var _dusk_menu: Button
 
 
 func _ready() -> void:
@@ -70,7 +77,9 @@ func _connect_world() -> void:
 	world.wind_warning.connect(_on_wind)
 	world.wave_card.connect(_on_banner)
 	world.wave_clear.connect(_on_banner)
-	world.mutation_ready.connect(_on_mutation)
+	world.relic_ready.connect(_on_relic)
+	world.victory.connect(_on_victory)
+	world.lineup.connect(_on_lineup)
 	world.tower.balance_hit.connect(_on_balance_popup)
 
 
@@ -104,8 +113,18 @@ func _process(delta: float) -> void:
 	_meter.queue_redraw()
 	_score.text = str(world.score)
 	_wave.text = Locale.t("wave") % world.wave
+	if _purse:
+		_purse.text = "+%d" % world.run_coins
+	if _boss_label:
+		var boss_alive := world._boss != null and is_instance_valid(world._boss) and not world._boss.dead
+		_boss_label.visible = boss_alive
+		if boss_alive:
+			var ratio := world._boss.hp / maxf(world._boss.max_hp, 0.01)
+			_boss_label.text = "%s  %d%%" % [Locale.t("cre_" + world._boss.kind), int(ratio * 100.0)]
 	_freeze.visible = world.tower.tilt_deg() >= 18.0 and world.tower.freeze_ready()
-	_drop.disabled = world.tower.falling
+	_drop.disabled = world.tower.falling or world.held.is_empty()
+	if _flag:
+		_flag.visible = world._breath > 0.0
 	var sig := _queue_signature()
 	if sig != _queue_sig:
 		_queue_sig = sig
@@ -165,9 +184,12 @@ func _build() -> void:
 	menu_box.offset_bottom = -36
 	_play = _button("play", _on_play, true)
 	_heat_btn = _button("heat", _toggle_heat, false)
+	_heat_btn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_dusk_menu = _button("dusk", _on_dusk, false)
+	_dusk_menu.visible = false
 	_mod_btn = _button("modules", _open_shop, false)
 	_set_btn = _button("settings", _open_settings, false)
-	for node in [_play, _heat_btn, _mod_btn, _set_btn]:
+	for node in [_play, _heat_btn, _dusk_menu, _mod_btn, _set_btn]:
 		menu_box.add_child(node)
 	_menu.add_child(menu_box)
 	add_child(_menu)
@@ -257,13 +279,24 @@ func _build_hud() -> void:
 	_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	_banner.offset_left = -460
 	_banner.offset_right = 460
-	_banner.offset_top = 300
-	_banner.offset_bottom = 460
+	_banner.offset_top = 132
+	_banner.offset_bottom = 200
 	_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_banner.visible = false
 	_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(_banner)
+	_lineup = HBoxContainer.new()
+	_lineup.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_lineup.offset_left = -480
+	_lineup.offset_right = 480
+	_lineup.offset_top = 200
+	_lineup.offset_bottom = 268
+	_lineup.alignment = BoxContainer.ALIGNMENT_CENTER
+	_lineup.add_theme_constant_override("separation", 10)
+	_lineup.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lineup.visible = false
+	_hud.add_child(_lineup)
 	_choice = _full(Color(0.05, 0.08, 0.12, 0.72))
 	_choice.visible = false
 	var choice_box := _column()
@@ -272,7 +305,7 @@ func _build_hud() -> void:
 	choice_box.offset_right = 420
 	choice_box.offset_top = -360
 	choice_box.offset_bottom = 360
-	choice_box.add_child(_label_key("choose", 48))
+	choice_box.add_child(_label_key("choose", 42))
 	choice_box.add_child(_button("mut_0", func() -> void: _pick_mut(0), true))
 	choice_box.add_child(_button("mut_1", func() -> void: _pick_mut(1), false))
 	choice_box.add_child(_button("mut_2", func() -> void: _pick_mut(2), false))
@@ -281,21 +314,38 @@ func _build_hud() -> void:
 
 	_meter = LeanBar.new()
 	_meter.world = world
-	_meter.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_meter.offset_left = -360
-	_meter.offset_right = 360
-	_meter.offset_top = 130
-	_meter.offset_bottom = 176
+	_meter.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_meter.offset_left = 28
+	_meter.offset_right = 188
+	_meter.offset_top = 132
+	_meter.offset_bottom = 292
 	_hud.add_child(_meter)
 
+	_purse = _label("+0", 28)
+	_purse.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_purse.offset_top = 108
+	_purse.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_purse.modulate = Color("d6ff3f")
+	_hud.add_child(_purse)
+
+	_boss_label = _label("", 32)
+	_boss_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_boss_label.offset_left = -520
+	_boss_label.offset_top = 96
+	_boss_label.offset_right = -28
+	_boss_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_boss_label.modulate = Color("ff5a32")
+	_boss_label.visible = false
+	_hud.add_child(_boss_label)
+
 	_queue = HBoxContainer.new()
-	_queue.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_queue.offset_left = -420
-	_queue.offset_right = 420
-	_queue.offset_top = 196
-	_queue.offset_bottom = 300
+	_queue.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_queue.offset_left = -500
+	_queue.offset_right = 500
+	_queue.offset_top = -560
+	_queue.offset_bottom = -380
 	_queue.alignment = BoxContainer.ALIGNMENT_CENTER
-	_queue.add_theme_constant_override("separation", 16)
+	_queue.add_theme_constant_override("separation", 12)
 	_queue.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(_queue)
 
@@ -303,8 +353,8 @@ func _build_hud() -> void:
 	_tutorial.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	_tutorial.offset_left = -480
 	_tutorial.offset_right = 480
-	_tutorial.offset_top = -250
-	_tutorial.offset_bottom = -150
+	_tutorial.offset_top = -430
+	_tutorial.offset_bottom = -280
 	_tutorial.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_tutorial.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hud.add_child(_tutorial)
@@ -347,6 +397,14 @@ func _build_hud() -> void:
 	turn.offset_right = 280
 	turn.offset_bottom = -36
 	_hud.add_child(turn)
+	_flag = _button("call_wave", func() -> void: world.call_wave(), true)
+	_flag.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_flag.offset_left = -180
+	_flag.offset_right = 180
+	_flag.offset_top = -720
+	_flag.offset_bottom = -600
+	_flag.visible = false
+	_hud.add_child(_flag)
 
 
 func _build_settings() -> void:
@@ -397,7 +455,11 @@ func _build_over() -> void:
 	_double = _button("double", _on_double, false)
 	_retry = _button("retry", _on_retry, false)
 	_over_menu = _button("menu", _on_over_menu, false)
-	for node in [_over_title, _over_stats, _revive, _double, _retry, _over_menu]:
+	_endless_btn = _button("endless", _on_endless, true)
+	_dusk_btn = _button("dusk", _on_dusk_from_win, false)
+	_endless_btn.visible = false
+	_dusk_btn.visible = false
+	for node in [_over_title, _over_stats, _revive, _double, _retry, _endless_btn, _dusk_btn, _over_menu]:
 		box.add_child(node)
 	_over.add_child(box)
 
@@ -494,15 +556,64 @@ func _on_fell() -> void:
 	var culprit := ""
 	if world.tower.culprit_id != "":
 		culprit = "\n" + Locale.t("culprit") % Locale.t("mod_" + world.tower.culprit_id)
-	_over_stats.text = "%s %d    %s %d    %s %d\n+%d %s%s%s" % [
+	var net := ""
+	if world.net_kills > 0:
+		net = "\n%s %d" % [Locale.t("network"), world.net_kills]
+	_over_stats.text = "%s %d    %s %d    %s %d\n+%d %s%s%s%s" % [
 		Locale.t("height"), height,
 		Locale.t("kills"), world.kills,
 		Locale.t("score"), world.score,
-		world.last_earned, Locale.t("coins"), best_mark, culprit,
+		world.last_earned, Locale.t("coins"), best_mark, culprit, net,
 	]
 	_revive.visible = not world.revives_used
 	_double.visible = true
+	if _endless_btn:
+		_endless_btn.visible = false
+	if _dusk_btn:
+		_dusk_btn.visible = false
 	_show("over")
+
+
+func _on_victory() -> void:
+	get_tree().paused = false
+	_over_title.text = Locale.t("victory")
+	_over_stats.text = "%s %d    %s %d\n+%d %s\n%s %d" % [
+		Locale.t("height"), world.tower.height_blocks(),
+		Locale.t("kills"), world.kills,
+		world.last_earned, Locale.t("coins"),
+		Locale.t("network"), world.net_kills,
+	]
+	_revive.visible = false
+	_double.visible = false
+	_endless_btn.visible = true
+	_dusk_btn.visible = world.chapter == "meadow"
+	_show("over")
+
+
+func _on_endless() -> void:
+	world.continue_endless()
+	_queue_sig = ""
+	_show("hud")
+	AudioDirector.play("click")
+
+
+func _on_dusk() -> void:
+	_start_chapter("dusk")
+
+
+func _on_dusk_from_win() -> void:
+	_start_chapter("dusk")
+
+
+func _start_chapter(chapter_name: String) -> void:
+	get_tree().paused = false
+	Ads.hide_banner()
+	world.start_run(false, chapter_name)
+	_doubled = false
+	_queue_sig = ""
+	_tutorial.visible = false
+	_show("hud")
+	AudioDirector.play("click")
 
 
 func _on_revive() -> void:
@@ -572,17 +683,18 @@ func _on_tutorial(step: int) -> void:
 	_tutorial.text = Locale.t("tutorial_%d" % step)
 
 
-func _on_wind(dir: Vector2) -> void:
-	_wind.visible = true
-	_wind.text = Locale.t("wind")
-	_wind_life = 1.3
-	_wind.rotation = dir.angle() * 0.15
+func _on_wind(_dir: Vector2) -> void:
+	if _wind:
+		_wind.visible = false
 
 
 func _on_balance_popup() -> void:
+	if _balance == null or world == null:
+		return
+	var chain := world.tower.perfect_chain
+	_balance.text = Locale.t("balance") if chain <= 1 else "%s  x%d" % [Locale.t("balance"), chain]
 	_balance.visible = true
-	_balance.text = Locale.t("balance")
-	_balance_life = 0.9
+	_balance_life = 0.7
 
 
 func _open_shop() -> void:
@@ -659,9 +771,10 @@ func _rebuild_shop() -> void:
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_shop_box.add_child(hint)
 	_shop_box.add_child(_label("%s: %d" % [Locale.t("coins"), GameState.coins], 32))
-	_add_upgrade("statue", "upgrade_statue")
-	_add_upgrade("cannon", "upgrade_cannon")
-	_add_upgrade("generator", "upgrade_generator")
+	_add_toy("ghost")
+	_add_toy("base_gen")
+	_add_toy("relic")
+	_add_toy("stud")
 	_add_plant("splash", "02_side_cannon")
 	_add_plant("air", "03_twin_guns")
 	_add_plant("bounce", "09_crystal_spur")
@@ -682,6 +795,43 @@ func _rebuild_shop() -> void:
 		card.add_theme_stylebox_override("panel", stripe)
 		_shop_box.add_child(card)
 	_shop_box.add_child(_button("close", _open_menu, false))
+
+
+func _add_toy(id: String) -> void:
+	var card := PanelContainer.new()
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	var text := _label("%s\n%s" % [Locale.t("toy_" + id), Locale.t("toy_" + id + "_fx")], 26)
+	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(text)
+	var b := Button.new()
+	if GameState.toy_owned(id):
+		b.text = Locale.t("owned")
+		b.disabled = true
+	else:
+		b.text = "%s %d" % [Locale.t("buy"), GameState.toy_cost(id)]
+		b.pressed.connect(func() -> void:
+			if GameState.try_buy_toy(id):
+				AudioDirector.play("click")
+				_rebuild_shop()
+			else:
+				_toast_msg(Locale.t("coins"))
+		)
+	b.custom_minimum_size = Vector2(240, 84)
+	row.add_child(b)
+	card.add_child(row)
+	var stripe := StyleBoxFlat.new()
+	stripe.bg_color = Color("1c2430")
+	stripe.set_corner_radius_all(18)
+	stripe.content_margin_left = 16
+	stripe.content_margin_right = 16
+	stripe.content_margin_top = 12
+	stripe.content_margin_bottom = 12
+	stripe.border_color = Color("d6ff3f")
+	stripe.set_border_width_all(3)
+	card.add_theme_stylebox_override("panel", stripe)
+	_shop_box.add_child(card)
 
 
 func _add_upgrade(stat: String, key: String) -> void:
@@ -751,32 +901,58 @@ func _paint_queue() -> void:
 		child.queue_free()
 	if world == null:
 		return
+	if not world.held.is_empty():
+		_queue.add_child(_piece_card(world.held, -1))
+		return
 	var index := 0
 	for piece in world.queue:
-		var id := str(piece.id)
-		var text := Locale.t("mod_" + id)
-		if bool(piece.epic):
-			text = Locale.t("epic") + "\n" + text
-		var chip := PanelContainer.new()
-		chip.custom_minimum_size = Vector2(280, 110) if index == 0 else Vector2(200, 96)
-		var chip_label := _label(text, 26)
-		chip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		chip_label.add_theme_color_override("font_color", Color("14180f"))
-		chip.add_child(chip_label)
-		var chip_box := StyleBoxFlat.new()
-		var tint: Color = ModelUtil.FALLBACK.get(id, Color("d6ff3f"))
-		chip_box.bg_color = Color(tint.r, tint.g, tint.b, 0.92)
-		chip_box.set_corner_radius_all(18)
-		chip_box.content_margin_left = 12
-		chip_box.content_margin_right = 12
-		chip_box.content_margin_top = 8
-		chip_box.content_margin_bottom = 8
-		if bool(piece.epic):
-			chip_box.border_color = Color("d6ff3f")
-			chip_box.set_border_width_all(4)
-		chip.add_theme_stylebox_override("panel", chip_box)
-		_queue.add_child(chip)
+		_queue.add_child(_piece_card(piece, index))
 		index += 1
+
+
+func _piece_card(piece: Dictionary, index: int) -> Control:
+	var id := str(piece.id)
+	var raw: Variant = Catalog.module(id).get("com", [0, 0, 0])
+	var pull := float(raw[0]) if raw is Array and raw.size() > 0 else 0.0
+	var arrow := "→" if pull > 0.05 else ("←" if pull < -0.05 else "·")
+	var light := ""
+	if index < 0:
+		light = ""
+	elif world.tower != null and world.tower.would_light(id):
+		light = "\n" + Locale.t("seal_lights")
+	var text := "%s\n%s  %s%s" % [Locale.t("mod_" + id), Locale.t(Catalog.seal_key(id)), arrow, light]
+	if bool(piece.get("epic", false)):
+		text = Locale.t("epic") + "\n" + text
+	var chip := Button.new()
+	chip.text = text
+	chip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	chip.custom_minimum_size = Vector2(300, 150) if index < 0 else Vector2(300, 170)
+	chip.add_theme_font_size_override("font_size", 26)
+	chip.add_theme_color_override("font_color", Color("14180f"))
+	if index >= 0:
+		var pick := index
+		chip.pressed.connect(func() -> void:
+			world.choose_offer(pick)
+			_queue_sig = ""
+			_paint_queue()
+		)
+	else:
+		chip.disabled = true
+	var chip_box := StyleBoxFlat.new()
+	var tint: Color = ModelUtil.FALLBACK.get(id, Color("d6ff3f"))
+	chip_box.bg_color = Color(tint.r, tint.g, tint.b, 0.95)
+	chip_box.set_corner_radius_all(22)
+	chip_box.content_margin_left = 14
+	chip_box.content_margin_right = 14
+	chip_box.content_margin_top = 10
+	chip_box.content_margin_bottom = 10
+	chip_box.border_color = Color("d6ff3f") if bool(piece.get("epic", false)) or index < 0 else Color("1c2430")
+	chip_box.set_border_width_all(4)
+	chip.add_theme_stylebox_override("normal", chip_box)
+	chip.add_theme_stylebox_override("hover", chip_box)
+	chip.add_theme_stylebox_override("pressed", chip_box)
+	chip.add_theme_stylebox_override("disabled", chip_box)
+	return chip
 
 
 func _toggle_heat() -> void:
@@ -791,24 +967,64 @@ func _on_banner(text: String) -> void:
 	_banner.text = text
 	_banner.visible = true
 	_banner.modulate.a = 1.0
-	_banner_life = 1.2
+	_banner_life = 3.2
 
 
-func _on_mutation() -> void:
-	if _choice:
-		_choice.visible = true
+func _on_lineup(ids: Array) -> void:
+	if _lineup == null:
+		return
+	for child in _lineup.get_children():
+		child.queue_free()
+	_lineup.visible = not ids.is_empty()
+	for entry in ids:
+		var id := str(entry.get("id", "")) if entry is Dictionary else str(entry)
+		var boss := entry is Dictionary and bool(entry.get("boss", false))
+		var elite := entry is Dictionary and bool(entry.get("elite", false))
+		var chip := Panel.new()
+		chip.custom_minimum_size = Vector2(58, 58)
+		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var box := StyleBoxFlat.new()
+		box.bg_color = Enemy.role_color(id)
+		box.set_corner_radius_all(29)
+		box.set_border_width_all(5 if boss or elite else 0)
+		box.border_color = Color("ff5a32") if boss else Color("ffd15a")
+		chip.add_theme_stylebox_override("panel", box)
+		_lineup.add_child(chip)
+
+
+func _on_relic() -> void:
+	if _choice == null or world == null:
+		return
+	_choice.visible = true
+	var labels := _choice.find_children("*", "Label", true, false)
+	if not labels.is_empty() and labels[0] is Label:
+		(labels[0] as Label).text = Locale.t("choose")
+	var buttons := _choice.find_children("*", "Button", true, false)
+	for i in buttons.size():
+		var button := buttons[i] as Button
+		if i < world.relic_offer.size():
+			button.text = Locale.t("relic_" + world.relic_offer[i])
+			button.visible = true
+		else:
+			button.visible = false
 
 
 func _pick_mut(which: int) -> void:
 	if _choice:
 		_choice.visible = false
-	if world:
+	if world and not world.relic_offer.is_empty():
+		world.pick_relic(which)
+	elif world:
 		world.apply_mutation(which)
 	AudioDirector.play("click")
 
 
 func _queue_signature() -> String:
 	var sig := ""
+	if world != null and not world.held.is_empty():
+		sig = "H%s|" % str(world.held.id)
+	if world == null:
+		return sig
 	for piece in world.queue:
 		sig += str(piece.id)
 		if bool(piece.epic):
@@ -828,6 +1044,11 @@ func _refresh_copy() -> void:
 	_play.text = Locale.t("play")
 	if _heat_btn:
 		_heat_btn.text = Locale.t("heat_on") if GameState.heat else Locale.t("heat_off")
+	if _dusk_menu:
+		_dusk_menu.visible = GameState.dusk_open
+		_dusk_menu.text = Locale.t("dusk")
+	if _flag:
+		_flag.text = Locale.t("call_wave")
 	_mod_btn.text = Locale.t("modules")
 	_set_btn.text = Locale.t("settings")
 	_drop.text = Locale.t("drop")
@@ -1001,22 +1222,32 @@ class LeanBar extends Control:
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 	func _draw() -> void:
-		var w := size.x
-		var h := size.y
-		draw_rect(Rect2(Vector2.ZERO, size), Color("163044"), true)
-		draw_rect(Rect2(Vector2.ZERO, size), Color("d6ff3f"), false, 3.0)
+		var center := size * 0.5
+		var radius := minf(size.x, size.y) * 0.46
+		draw_circle(center, radius, Color("163044"))
+		draw_arc(center, radius, 0, TAU, 48, Color("d6ff3f"), 4.0, true)
+		draw_line(center - Vector2(radius, 0), center + Vector2(radius, 0), Color("2a3c30"), 2.0)
+		draw_line(center - Vector2(0, radius), center + Vector2(0, radius), Color("2a3c30"), 2.0)
+		var lean := Vector2.ZERO
+		var preview := Vector2.ZERO
 		var mag := 0.0
-		var signed := 0.0
 		if world != null and world.tower != null:
 			mag = world.tower.tilt_deg()
-			signed = world.tower.tilt_signed_deg()
+			lean = Vector2(rad_to_deg(world.tower.tilt_x), rad_to_deg(world.tower.tilt_z))
+			preview = world.tower.preview_equilibrium_deg()
 		var col := Color("8fe05a")
 		if mag >= 8.0:
 			col = Color("f0c14a")
 		if mag >= 18.0:
 			col = Color("ff5a3c")
-		draw_line(Vector2(w * 0.5, 4), Vector2(w * 0.5, h - 4), Color("d6ff3f"), 3.0)
-		var t := clampf(signed / 28.0, -1.0, 1.0)
-		var x := w * 0.5 + t * w * 0.42
-		draw_circle(Vector2(x, h * 0.5), h * 0.42, col)
-		draw_circle(Vector2(x, h * 0.5), h * 0.22, Color("fff6c8"))
+		var bubble := center + Vector2(lean.x, -lean.y) / 28.0 * radius
+		draw_circle(bubble, radius * 0.16, col)
+		draw_circle(bubble, radius * 0.07, Color("fff6c8"))
+		if world != null and world.tower != null and world.tower._ghost_id != "":
+			var ghost := center + Vector2(preview.x, -preview.y) / 28.0 * radius
+			draw_arc(ghost, radius * 0.12, 0, TAU, 24, Color("d6ff3f"), 3.0, true)
+			if GameState.toy_ghost and ThemeDB.fallback_font != null:
+				draw_string(ThemeDB.fallback_font, ghost + Vector2(8, -8), "%d°" % int(preview.length()), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color("f4f1ea"))
+		if world != null and world.wind_preview.length() > 0.2:
+			var tip := center + world.wind_preview.normalized() * radius * 0.7
+			draw_line(center, tip, Color("9fd0ff"), 4.0)

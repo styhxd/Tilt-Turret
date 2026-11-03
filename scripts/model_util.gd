@@ -90,6 +90,53 @@ static func local_aabb(node: Node3D) -> AABB:
 	return box
 
 
+static func dim(node: Node3D, on: bool) -> void:
+	for mi in _meshes(node):
+		if mi.name == "PowerCore":
+			continue
+		var mesh := mi.mesh
+		if mesh == null:
+			continue
+		for i in mesh.get_surface_count():
+			var current = mi.get_surface_override_material(i)
+			if current == null:
+				current = mi.get_active_material(i)
+			if current == null or not (current is StandardMaterial3D):
+				continue
+			var std := (current as StandardMaterial3D).duplicate() as StandardMaterial3D
+			if not mi.has_meta("base_albedo_%d" % i):
+				mi.set_meta("base_albedo_%d" % i, std.albedo_color)
+				mi.set_meta("base_emission_tex_%d" % i, std.emission_texture)
+				mi.set_meta("base_emission_%d" % i, std.emission)
+				mi.set_meta("base_emission_energy_%d" % i, std.emission_energy_multiplier)
+			var base: Color = mi.get_meta("base_albedo_%d" % i)
+			if on:
+				std.albedo_color = base.lerp(Color(0.16, 0.16, 0.18), 0.78)
+				std.emission_enabled = true
+				std.emission_texture = null
+				std.emission = Color(0.02, 0.02, 0.025)
+				std.emission_energy_multiplier = 0.0
+			else:
+				std.albedo_color = base
+				std.emission_enabled = true
+				std.emission_texture = mi.get_meta("base_emission_tex_%d" % i)
+				std.emission = mi.get_meta("base_emission_%d" % i)
+				std.emission_energy_multiplier = float(mi.get_meta("base_emission_energy_%d" % i))
+			mi.set_surface_override_material(i, std)
+
+
+static func outline(node: Node3D, color: Color) -> void:
+	var shader := load("res://shaders/rim.gdshader") as Shader
+	if shader == null:
+		return
+	for mi in _meshes(node):
+		var mat := ShaderMaterial.new()
+		mat.shader = shader
+		mat.set_shader_parameter("rim_color", color)
+		mat.set_shader_parameter("push", 0.055)
+		mi.material_overlay = mat
+
+
 static func tint(node: Node3D, color: Color) -> void:
 	for mi in _meshes(node):
 		var mesh := mi.mesh

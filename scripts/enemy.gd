@@ -37,6 +37,12 @@ var _tint := Color.WHITE
 var _flashed := false
 var _warn: MeshInstance3D
 var _bar: MeshInstance3D
+var _chevron: MeshInstance3D
+var _shadow: MeshInstance3D
+var _plate: MeshInstance3D
+var marked := 0.0
+var _role_color := Color("c9863a")
+var _phase2 := false
 
 
 func setup(def: Dictionary, wave: int, as_elite: bool, as_boss: bool = false) -> void:
@@ -66,35 +72,72 @@ func setup(def: Dictionary, wave: int, as_elite: bool, as_boss: bool = false) ->
 		hp *= 1.8
 		impulse *= 1.4
 		speed *= 1.08
+	if str(def.get("chapter", "")) == "dusk":
+		hp *= 1.35
+		impulse *= 1.12
 	max_hp = hp
 	_angle = randf() * TAU
 	_phase = randf() * TAU
 	var visual := ModelUtil.instantiate("creatures", kind)
 	add_child(visual)
-	ModelUtil.fit(visual, float(def.visual_height))
-	var tint := Color(1, 1, 1)
+	ModelUtil.fit(visual, float(def.visual_height) * 1.18)
+	_role_color = _role_tint(kind)
 	if boss:
-		tint = Color(0.95, 0.42, 0.28)
-		scale = Vector3.ONE * 1.85
+		_role_color = Color("ff5a32")
+		scale = Vector3.ONE * 1.9
 	elif elite:
-		tint = Color(0.62, 0.48, 0.46)
-		scale = Vector3.ONE * 1.32
+		_role_color = Color("ffd15a")
+		scale = Vector3.ONE * 1.42
 	else:
-		var palette := [
-			Color(1.0, 1.0, 1.0),
-			Color(0.72, 0.95, 0.78),
-			Color(1.0, 0.8, 0.68),
-			Color(0.72, 0.8, 1.0),
-			Color(0.92, 0.74, 1.0),
-		]
-		tint = palette[randi() % palette.size()]
-		scale = Vector3.ONE * randf_range(0.78, 1.14)
-	ModelUtil.tint(visual, tint)
-	_tint = tint
+		scale = Vector3.ONE * 1.22
+	ModelUtil.outline(visual, _role_color)
+	_tint = _role_color
 	_visual = visual
 	_base_scale = scale
 	_anim = visual.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	_play("fly" if flying else "move")
+	_shadow = MeshInstance3D.new()
+	var blob := CylinderMesh.new()
+	blob.top_radius = 0.42
+	blob.bottom_radius = 0.42
+	blob.height = 0.03
+	_shadow.mesh = blob
+	var shadow_mat := StandardMaterial3D.new()
+	shadow_mat.albedo_color = Color(0.05, 0.07, 0.08, 0.45)
+	shadow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	shadow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_shadow.material_override = shadow_mat
+	_shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_shadow.top_level = true
+	add_child(_shadow)
+	_chevron = MeshInstance3D.new()
+	var arrow := BoxMesh.new()
+	arrow.size = Vector3(0.18, 0.06, 0.55)
+	_chevron.mesh = arrow
+	var arrow_mat := StandardMaterial3D.new()
+	arrow_mat.albedo_color = Color("ff4d3a")
+	arrow_mat.emission_enabled = true
+	arrow_mat.emission = Color("ff4d3a")
+	arrow_mat.emission_energy_multiplier = 2.2
+	arrow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_chevron.material_override = arrow_mat
+	_chevron.visible = false
+	_chevron.top_level = true
+	_chevron.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_chevron)
+	if role == "armor":
+		_plate = MeshInstance3D.new()
+		var plate_mesh := BoxMesh.new()
+		plate_mesh.size = Vector3(0.55, 0.28, 0.12)
+		_plate.mesh = plate_mesh
+		var plate_mat := StandardMaterial3D.new()
+		plate_mat.albedo_color = Color("9eb4c6")
+		plate_mat.emission_enabled = true
+		plate_mat.emission = Color("d5e4ef")
+		plate_mat.emission_energy_multiplier = 0.35
+		_plate.material_override = plate_mat
+		_plate.position = Vector3(0.15, float(def.visual_height) * 0.45, 0.28)
+		add_child(_plate)
 	if death_push > 0.0:
 		_warn = MeshInstance3D.new()
 		var ball := SphereMesh.new()
@@ -141,6 +184,8 @@ func take_damage(amount: float, splash: float = 0.0) -> void:
 
 func tick(dt: float, tower) -> void:
 	_hit = maxf(_hit - dt, 0.0)
+	marked = maxf(marked - dt, 0.0)
+	_place_marks()
 	if _dying:
 		scale = scale.lerp(Vector3.ONE * 0.02, 1.0 - exp(-10.0 * dt))
 		position.y += dt * 0.8
@@ -158,12 +203,21 @@ func tick(dt: float, tower) -> void:
 			died.emit()
 		return
 	scale = _base_scale * (1.0 + _hit * 1.8)
+	if boss and role == "armor" and not _phase2 and hp < max_hp * 0.5:
+		_phase2 = true
+		armor = 1.0
+		impulse *= 1.25
+		_role_color = Color("ff5a32")
+		if _visual != null:
+			ModelUtil.outline(_visual, _role_color)
+		if _plate != null:
+			_plate.visible = false
 	if _visual != null and _hit > 0.08 and not _flashed:
 		_flashed = true
-		ModelUtil.tint(_visual, Color(1.0, 0.96, 0.82))
+		ModelUtil.outline(_visual, Color("fff4d2"))
 	elif _visual != null and _hit <= 0.0 and _flashed:
 		_flashed = false
-		ModelUtil.tint(_visual, _tint)
+		ModelUtil.outline(_visual, _role_color)
 	if _warn != null:
 		_warn.scale = Vector3.ONE * (1.0 + 0.35 * sin(Time.get_ticks_msec() * 0.012))
 	if _bar != null:
@@ -225,11 +279,49 @@ func _hold_attack(dt: float, tower: Tower) -> void:
 	_attack -= dt
 	if _attack <= 0.0:
 		_attack = attack_period
-		_windup = 0.42 if role == "tank" else 0.2
+		_windup = 0.48 if role == "tank" else 0.35
 		_play("attack")
 		return
 	if clip_name() != "attack":
 		_play("idle")
+
+
+static func role_color(id: String) -> Color:
+	match id:
+		"01_ram_beetle":
+			return Color("c9863a")
+		"02_smash_crab":
+			return Color("8aa4b8")
+		"03_iron_slug":
+			return Color("5c646c")
+		"04_manta_bat":
+			return Color("9a55d6")
+		"05_sting_wasp":
+			return Color("f0c83a")
+		"06_bloated_tick":
+			return Color("e23b32")
+	return Color("c9863a")
+
+
+func _role_tint(id: String) -> Color:
+	return role_color(id)
+
+
+func _place_marks() -> void:
+	if _shadow != null:
+		_shadow.global_position = Vector3(global_position.x, 0.06, global_position.z)
+	var show_arrow := _windup > 0.0 or (_doomed and death_push > 0.0)
+	if _chevron == null:
+		return
+	_chevron.visible = show_arrow
+	if not show_arrow:
+		return
+	var push := Vector3(global_position.x, 0.0, global_position.z)
+	if push.length() < 0.05:
+		push = Vector3(0, 0, -1)
+	push = push.normalized()
+	_chevron.global_position = Vector3(global_position.x, 0.1, global_position.z) + push * 0.75
+	_chevron.rotation = Vector3(0, atan2(push.x, push.z), 0)
 
 
 func _ground_mark() -> void:

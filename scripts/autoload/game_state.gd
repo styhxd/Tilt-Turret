@@ -21,6 +21,12 @@ var plant_splash: bool = false
 var plant_air: bool = false
 var plant_bounce: bool = false
 var heat: bool = false
+var toy_ghost: bool = false
+var toy_base_gen: bool = false
+var toy_relic: bool = false
+var toy_stud: bool = false
+var legacy_refunded: bool = false
+var dusk_open: bool = false
 var last_interstitial_msec: int = -100000
 var last_rewarded_msec: int = -100000
 
@@ -93,6 +99,73 @@ func try_buy_plant(id: String) -> bool:
 			return false
 	save_game()
 	return true
+
+
+func try_buy_toy(id: String) -> bool:
+	if toy_owned(id):
+		return false
+	var cost := toy_cost(id)
+	if coins < cost:
+		return false
+	coins -= cost
+	match id:
+		"ghost":
+			toy_ghost = true
+		"base_gen":
+			toy_base_gen = true
+		"relic":
+			toy_relic = true
+		"stud":
+			toy_stud = true
+		_:
+			return false
+	save_game()
+	return true
+
+
+func toy_owned(id: String) -> bool:
+	match id:
+		"ghost":
+			return toy_ghost
+		"base_gen":
+			return toy_base_gen
+		"relic":
+			return toy_relic
+		"stud":
+			return toy_stud
+	return false
+
+
+func toy_cost(id: String) -> int:
+	match id:
+		"ghost":
+			return 90
+		"base_gen":
+			return 120
+		"relic":
+			return 150
+		"stud":
+			return 160
+	return 9999
+
+
+func _refund_legacy() -> void:
+	if legacy_refunded:
+		return
+	var grant := _spent(upgrade_statue) + _spent(upgrade_cannon) + _spent(upgrade_generator)
+	coins += grant
+	upgrade_statue = 0
+	upgrade_cannon = 0
+	upgrade_generator = 0
+	legacy_refunded = true
+	save_game()
+
+
+func _spent(level: int) -> int:
+	var total := 0
+	for i in level:
+		total += 40 + i * 35
+	return total
 
 
 func set_heat(on: bool) -> void:
@@ -179,6 +252,13 @@ func load_game() -> void:
 	plant_air = bool(cf.get_value("p", "plant_air", false))
 	plant_bounce = bool(cf.get_value("p", "plant_bounce", false))
 	heat = bool(cf.get_value("p", "heat", false))
+	toy_ghost = bool(cf.get_value("p", "toy_ghost", false))
+	toy_base_gen = bool(cf.get_value("p", "toy_base_gen", false))
+	toy_relic = bool(cf.get_value("p", "toy_relic", false))
+	toy_stud = bool(cf.get_value("p", "toy_stud", false))
+	legacy_refunded = bool(cf.get_value("p", "legacy_refunded", false))
+	dusk_open = bool(cf.get_value("p", "dusk_open", false))
+	_refund_legacy()
 
 
 func save_game() -> void:
@@ -201,4 +281,10 @@ func save_game() -> void:
 	cf.set_value("p", "plant_air", plant_air)
 	cf.set_value("p", "plant_bounce", plant_bounce)
 	cf.set_value("p", "heat", heat)
+	cf.set_value("p", "toy_ghost", toy_ghost)
+	cf.set_value("p", "toy_base_gen", toy_base_gen)
+	cf.set_value("p", "toy_relic", toy_relic)
+	cf.set_value("p", "toy_stud", toy_stud)
+	cf.set_value("p", "legacy_refunded", legacy_refunded)
+	cf.set_value("p", "dusk_open", dusk_open)
 	cf.save(SAVE_PATH)
