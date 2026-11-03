@@ -1,0 +1,10 @@
+.godot/
+/android/
+/build/
+*.keystore
+*.jks
+export_presets.cfg
+tools/node_modules/
+*.tmp
+.DS_Store
+Thumbs.db
