@@ -47,6 +47,10 @@ var _shop_box: VBoxContainer
 var _labels: Array[Label] = []
 var _stage: Node3D
 var _diorama_cam: Camera3D
+var _banner: Label
+var _banner_life := 0.0
+var _choice: Control
+var _heat_btn: Button
 
 
 func _ready() -> void:
@@ -66,6 +70,9 @@ func _connect_world() -> void:
 	world.chest_ready.connect(_on_chest)
 	world.tutorial_step.connect(_on_tutorial)
 	world.wind_warning.connect(_on_wind)
+	world.wave_card.connect(_on_banner)
+	world.wave_clear.connect(_on_banner)
+	world.mutation_ready.connect(_on_mutation)
 	world.tower.balance_hit.connect(_on_balance_popup)
 
 
@@ -85,8 +92,19 @@ func _process(delta: float) -> void:
 		_wind_life -= delta
 		if _wind_life <= 0.0:
 			_wind.visible = false
+	if _banner_life > 0.0:
+		_banner_life -= delta
+		_banner.modulate.a = clampf(_banner_life, 0.0, 1.0)
+		if _banner_life <= 0.0:
+			_banner.visible = false
 	if world == null or not world.running or _screen != "hud":
 		return
+	if world.tower.ghost_good and not world.tower.falling:
+		var pulse := 1.0 + sin(Time.get_ticks_msec() * 0.008) * 0.045
+		_drop.pivot_offset = _drop.size * 0.5
+		_drop.scale = Vector2(pulse, pulse)
+	else:
+		_drop.scale = Vector2.ONE
 	_meter.queue_redraw()
 	_score.text = str(world.score)
 	_wave.text = Locale.t("wave") % world.wave
@@ -142,9 +160,10 @@ func _build() -> void:
 	_daily.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_daily.modulate = Color("e7c56a")
 	_play = _button("play", _on_play, true)
+	_heat_btn = _button("heat", _toggle_heat, false)
 	_mod_btn = _button("modules", _open_shop, false)
 	_set_btn = _button("settings", _open_settings, false)
-	for node in [_best, _coins, _daily, _play, _mod_btn, _set_btn]:
+	for node in [_best, _coins, _daily, _play, _heat_btn, _mod_btn, _set_btn]:
 		menu_box.add_child(node)
 	_menu.add_child(menu_box)
 	add_child(_menu)
@@ -231,6 +250,31 @@ func _build_hud() -> void:
 	_wave.offset_right = -28
 	_wave.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_hud.add_child(_wave)
+	_banner = _label("", 34)
+	_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_banner.offset_left = -460
+	_banner.offset_right = 460
+	_banner.offset_top = 300
+	_banner.offset_bottom = 460
+	_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_banner.visible = false
+	_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud.add_child(_banner)
+	_choice = _full(Color(0.05, 0.08, 0.12, 0.72))
+	_choice.visible = false
+	var choice_box := _column()
+	choice_box.set_anchors_preset(Control.PRESET_CENTER)
+	choice_box.offset_left = -420
+	choice_box.offset_right = 420
+	choice_box.offset_top = -360
+	choice_box.offset_bottom = 360
+	choice_box.add_child(_label_key("choose", 48))
+	choice_box.add_child(_button("mut_0", func() -> void: _pick_mut(0), true))
+	choice_box.add_child(_button("mut_1", func() -> void: _pick_mut(1), false))
+	choice_box.add_child(_button("mut_2", func() -> void: _pick_mut(2), false))
+	_choice.add_child(choice_box)
+	_hud.add_child(_choice)
 
 	_meter = LeanBar.new()
 	_meter.world = world
@@ -431,11 +475,14 @@ func _on_fell() -> void:
 	var best_mark := ""
 	if height >= GameState.best_height and height > 0:
 		best_mark = "\n" + Locale.t("new_best")
-	_over_stats.text = "%s %d    %s %d    %s %d\n+%d %s%s" % [
+	var culprit := ""
+	if world.tower.culprit_id != "":
+		culprit = "\n" + Locale.t("culprit") % Locale.t("mod_" + world.tower.culprit_id)
+	_over_stats.text = "%s %d    %s %d    %s %d\n+%d %s%s%s" % [
 		Locale.t("height"), height,
 		Locale.t("kills"), world.kills,
 		Locale.t("score"), world.score,
-		world.last_earned, Locale.t("coins"), best_mark,
+		world.last_earned, Locale.t("coins"), best_mark, culprit,
 	]
 	_revive.visible = not world.revives_used
 	_double.visible = true
@@ -599,6 +646,9 @@ func _rebuild_shop() -> void:
 	_add_upgrade("statue", "upgrade_statue")
 	_add_upgrade("cannon", "upgrade_cannon")
 	_add_upgrade("generator", "upgrade_generator")
+	_add_plant("splash", "02_side_cannon")
+	_add_plant("air", "03_twin_guns")
+	_add_plant("bounce", "09_crystal_spur")
 	for id in Catalog.modules().keys():
 		var card := PanelContainer.new()
 		var inner := _label("%s\n%s" % [Locale.t("mod_" + id), Locale.t("desc_" + id)], 26)
@@ -643,18 +693,60 @@ func _add_upgrade(stat: String, key: String) -> void:
 	_shop_box.add_child(row)
 
 
+func _add_plant(id: String, module_id: String) -> void:
+	var card := PanelContainer.new()
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	if DisplayServer.get_name() != "headless":
+		row.add_child(_mini(module_id, false))
+	var text := _label("%s\n%s" % [Locale.t("plant_" + id), Locale.t("plant_" + id + "_fx")], 26)
+	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(text)
+	var b := Button.new()
+	if GameState.plant_owned(id):
+		b.text = Locale.t("owned")
+		b.disabled = true
+	else:
+		b.text = "%s %d" % [Locale.t("buy"), GameState.plant_cost(id)]
+		b.pressed.connect(func() -> void:
+			if GameState.try_buy_plant(id):
+				AudioDirector.play("click")
+				_rebuild_shop()
+			else:
+				_toast_msg(Locale.t("coins"))
+		)
+	b.custom_minimum_size = Vector2(240, 84)
+	row.add_child(b)
+	card.add_child(row)
+	var stripe := StyleBoxFlat.new()
+	stripe.bg_color = Color(ModelUtil.FALLBACK.get(module_id, Color.WHITE), 0.22)
+	stripe.set_corner_radius_all(18)
+	stripe.content_margin_left = 16
+	stripe.content_margin_right = 16
+	stripe.content_margin_top = 12
+	stripe.content_margin_bottom = 12
+	stripe.border_color = Color("d6ff3f")
+	stripe.set_border_width_all(3)
+	card.add_theme_stylebox_override("panel", stripe)
+	_shop_box.add_child(card)
+
+
 func _paint_queue() -> void:
 	for child in _queue.get_children():
 		child.queue_free()
 	if world == null:
 		return
+	var index := 0
 	for piece in world.queue:
 		var id := str(piece.id)
 		var text := Locale.t("mod_" + id)
 		if bool(piece.epic):
 			text = Locale.t("epic") + "\n" + text
 		var chip := PanelContainer.new()
-		chip.custom_minimum_size = Vector2(250, 96)
+		chip.custom_minimum_size = Vector2(320, 210) if index == 0 else Vector2(200, 150)
+		if DisplayServer.get_name() != "headless":
+			chip.add_child(_mini(id, index == 0))
 		var chip_label := _label(text, 26)
 		chip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		chip_label.add_theme_color_override("font_color", Color("14180f"))
@@ -672,6 +764,60 @@ func _paint_queue() -> void:
 			chip_box.set_border_width_all(4)
 		chip.add_theme_stylebox_override("panel", chip_box)
 		_queue.add_child(chip)
+		index += 1
+
+
+func _mini(id: String, large: bool) -> SubViewportContainer:
+	var box := SubViewportContainer.new()
+	box.custom_minimum_size = Vector2(280, 120) if large else Vector2(120, 90)
+	box.stretch = true
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var vp := SubViewport.new()
+	vp.size = Vector2i(280, 140) if large else Vector2i(140, 100)
+	vp.transparent_bg = true
+	vp.own_world_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	box.add_child(vp)
+	var model := ModelUtil.instantiate("modules", id)
+	vp.add_child(model)
+	ModelUtil.fit(model, 0.9)
+	model.position = Vector3(0, 0, 0)
+	var cam := Camera3D.new()
+	cam.position = Vector3(0.7, 0.85, 2.1)
+	cam.rotation_degrees = Vector3(-18, 18, 0)
+	vp.add_child(cam)
+	var light := DirectionalLight3D.new()
+	light.rotation_degrees = Vector3(-40, 30, 0)
+	vp.add_child(light)
+	return box
+
+
+func _toggle_heat() -> void:
+	GameState.set_heat(not GameState.heat)
+	AudioDirector.play("click")
+	_refresh_copy()
+
+
+func _on_banner(text: String) -> void:
+	if _banner == null:
+		return
+	_banner.text = text
+	_banner.visible = true
+	_banner.modulate.a = 1.0
+	_banner_life = 1.2
+
+
+func _on_mutation() -> void:
+	if _choice:
+		_choice.visible = true
+
+
+func _pick_mut(which: int) -> void:
+	if _choice:
+		_choice.visible = false
+	if world:
+		world.apply_mutation(which)
+	AudioDirector.play("click")
 
 
 func _queue_signature() -> String:
@@ -693,6 +839,8 @@ func _refresh_copy() -> void:
 	_daily.visible = GameState.last_daily != today
 	_daily.text = Locale.t("daily")
 	_play.text = Locale.t("play")
+	if _heat_btn:
+		_heat_btn.text = Locale.t("heat_on") if GameState.heat else Locale.t("heat_off")
 	_mod_btn.text = Locale.t("modules")
 	_set_btn.text = Locale.t("settings")
 	_drop.text = Locale.t("drop")

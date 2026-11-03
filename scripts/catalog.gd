@@ -2,6 +2,7 @@ class_name Catalog
 
 static var _modules: Dictionary = {}
 static var _creatures: Dictionary = {}
+static var _waves: Array = []
 static var _ready := false
 
 const DROP_IDS: Array[String] = [
@@ -26,7 +27,20 @@ static func ensure() -> void:
 		return
 	_modules = _load_map("res://data/modules.json")
 	_creatures = _load_map("res://data/creatures.json")
+	_waves = _load_list("res://data/waves.json")
 	_ready = true
+
+
+static func _load_list(path: String) -> Array:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		push_error("Missing data %s" % path)
+		return []
+	var parsed = JSON.parse_string(file.get_as_text())
+	if typeof(parsed) != TYPE_ARRAY:
+		push_error("Bad data %s" % path)
+		return []
+	return parsed
 
 
 static func _load_map(path: String) -> Dictionary:
@@ -62,6 +76,14 @@ static func module(id: String) -> Dictionary:
 static func creature(id: String) -> Dictionary:
 	ensure()
 	return _creatures.get(id, {})
+
+
+static func wave_script(wave: int) -> Dictionary:
+	ensure()
+	for item in _waves:
+		if int(item.get("wave", -1)) == wave:
+			return item
+	return {}
 
 
 static func com_of(item: Dictionary) -> Vector3:

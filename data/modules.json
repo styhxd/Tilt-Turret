@@ -1,5 +1,5 @@
 [
-  {"id": "01_base_plate", "mass": 8.0, "height": 0.58, "com": [-0.04, 0.0, 0.0], "weapon": "none"},
+  {"id": "01_base_plate", "mass": 8.0, "height": 0.58, "com": [0.18, 0.0, 0.0], "weapon": "none"},
   {"id": "02_side_cannon", "mass": 3.0, "height": 0.96, "com": [0.34, 0.0, 0.04], "weapon": "cannon"},
   {"id": "03_twin_guns", "mass": 3.5, "height": 0.96, "com": [0.30, 0.0, -0.06], "weapon": "twin"},
   {"id": "04_generator", "mass": 2.0, "height": 0.88, "com": [-0.22, 0.0, -0.22], "weapon": "generator"},

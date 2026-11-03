@@ -13,6 +13,13 @@ var attack_period := 1.0
 var hit_radius := 1.3
 var dead := false
 var elite := false
+var boss := false
+var def: Dictionary = {}
+var role := ""
+var armor := 1.0
+var splash_taken := 1.0
+var death_push := 0.0
+var max_hp := 1.0
 var _attack := 0.0
 var _angle := 0.0
 var _phase := 0.0
@@ -21,11 +28,21 @@ var _base_scale := Vector3.ONE
 var _hit := 0.0
 var _dying := false
 var _visual: Node3D
+var _tint := Color.WHITE
+var _flashed := false
+var _warn: MeshInstance3D
+var _bar: MeshInstance3D
 
 
-func setup(def: Dictionary, wave: int, as_elite: bool) -> void:
+func setup(def: Dictionary, wave: int, as_elite: bool, as_boss: bool = false) -> void:
+	self.def = def
 	kind = str(def.id)
-	elite = as_elite
+	elite = as_elite or as_boss
+	boss = as_boss
+	role = str(def.get("role", ""))
+	armor = float(def.get("armor", 1.0))
+	splash_taken = float(def.get("splash_taken", 1.0))
+	death_push = float(def.get("death_push", 0.0))
 	flying = bool(def.flying)
 	speed = float(def.speed)
 	impulse = float(def.impulse)
@@ -33,17 +50,28 @@ func setup(def: Dictionary, wave: int, as_elite: bool) -> void:
 	attack_period = float(def.attack)
 	hit_radius = float(def.radius)
 	hp = float(def.hp) * (1.0 + float(wave - 1) * 0.12)
-	if elite:
+	if GameState.heat:
+		hp *= 1.45
+		impulse *= 1.35
+	if boss:
+		hp *= 4.2
+		impulse *= 1.6
+		speed *= 0.86
+	elif elite:
 		hp *= 1.8
 		impulse *= 1.4
 		speed *= 1.08
+	max_hp = hp
 	_angle = randf() * TAU
 	_phase = randf() * TAU
 	var visual := ModelUtil.instantiate("creatures", kind)
 	add_child(visual)
 	ModelUtil.fit(visual, float(def.visual_height))
 	var tint := Color(1, 1, 1)
-	if elite:
+	if boss:
+		tint = Color(0.95, 0.42, 0.28)
+		scale = Vector3.ONE * 1.85
+	elif elite:
 		tint = Color(0.62, 0.48, 0.46)
 		scale = Vector3.ONE * 1.32
 	else:
@@ -57,17 +85,48 @@ func setup(def: Dictionary, wave: int, as_elite: bool) -> void:
 		tint = palette[randi() % palette.size()]
 		scale = Vector3.ONE * randf_range(0.78, 1.14)
 	ModelUtil.tint(visual, tint)
+	_tint = tint
 	_visual = visual
 	_base_scale = scale
 	_anim = visual.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	_play("fly" if flying else "move")
+	if death_push > 0.0:
+		_warn = MeshInstance3D.new()
+		var ball := SphereMesh.new()
+		ball.radius = 0.16
+		ball.height = 0.32
+		_warn.mesh = ball
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color("ff4d3a")
+		mat.emission_enabled = true
+		mat.emission = Color("ff4d3a")
+		mat.emission_energy_multiplier = 2.4
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_warn.material_override = mat
+		_warn.position = Vector3(0, float(def.visual_height) + 0.25, 0)
+		add_child(_warn)
+	if boss:
+		_bar = MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(1.4, 0.08, 0.08)
+		_bar.mesh = box
+		var bar_mat := StandardMaterial3D.new()
+		bar_mat.albedo_color = Color("ffd15a")
+		bar_mat.emission_enabled = true
+		bar_mat.emission = Color("ffd15a")
+		bar_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_bar.material_override = bar_mat
+		_bar.position = Vector3(0, float(def.visual_height) + 0.55, 0)
+		add_child(_bar)
 
 
-func take_damage(amount: float) -> void:
+func take_damage(amount: float, splash: float = 0.0) -> void:
 	if dead:
 		return
-	hp -= amount
+	var mul := splash_taken if splash > 0.0 else armor
+	hp -= amount * mul
 	_hit = 0.16
+	_flashed = false
 	if hp <= 0.0 and not dead:
 		dead = true
 		_dying = true
@@ -85,6 +144,16 @@ func tick(dt: float, tower) -> void:
 	if dead or not tower.alive:
 		return
 	scale = _base_scale * (1.0 + _hit * 1.8)
+	if _visual != null and _hit > 0.08 and not _flashed:
+		_flashed = true
+		ModelUtil.tint(_visual, Color(1.0, 0.96, 0.82))
+	elif _visual != null and _hit <= 0.0 and _flashed:
+		_flashed = false
+		ModelUtil.tint(_visual, _tint)
+	if _warn != null:
+		_warn.scale = Vector3.ONE * (1.0 + 0.35 * sin(Time.get_ticks_msec() * 0.012))
+	if _bar != null:
+		_bar.scale.x = clampf(hp / maxf(max_hp, 0.01), 0.05, 1.0)
 	_attack -= dt
 	if flying:
 		_tick_fly(dt, tower)

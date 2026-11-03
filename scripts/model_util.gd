@@ -114,19 +114,20 @@ static func tint(node: Node3D, color: Color) -> void:
 				mi.set_surface_override_material(i, dup)
 
 
-static func ghost(node: Node3D) -> void:
+static func ghost(node: Node3D, good: bool = true) -> void:
+	var tint := Color(0.45, 0.95, 0.55, 0.42) if good else Color(0.95, 0.32, 0.28, 0.42)
 	for mi in _meshes(node):
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var mesh := mi.mesh
 		if mesh == null:
 			continue
 		for i in mesh.get_surface_count():
-			var mat = mi.get_active_material(i)
 			var std := StandardMaterial3D.new()
-			if mat is StandardMaterial3D:
-				std = (mat as StandardMaterial3D).duplicate()
 			std.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			std.albedo_color.a = 0.38
+			std.albedo_color = tint
+			std.emission_enabled = true
+			std.emission = Color(tint.r, tint.g, tint.b, 1.0)
+			std.emission_energy_multiplier = 0.6
 			std.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 			std.cull_mode = BaseMaterial3D.CULL_DISABLED
 			mi.set_surface_override_material(i, std)

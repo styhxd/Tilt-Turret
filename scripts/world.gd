@@ -5,6 +5,10 @@ signal fell
 signal chest_ready
 signal tutorial_step(step: int)
 signal wind_warning(dir: Vector2)
+signal wave_card(text: String)
+signal wave_clear(text: String)
+signal mutation_ready
+signal boss_changed(ratio: float)
 
 var tower: Tower
 var running := false
@@ -38,6 +42,23 @@ var _best_ring: MeshInstance3D
 var _shake := 0.0
 var _sparks: Array[Dictionary] = []
 var _spark_pool: Array[MeshInstance3D] = []
+var _card_left := 0.0
+var _card_pending := false
+var _clear_left := 0.0
+var _clear_sent := false
+var _script: Array[Dictionary] = []
+var _hitstop := 0.0
+var _boss: Enemy
+var _awaiting_choice := false
+var _choice_wave := 0
+var card_count := 0
+var missile_bursts := 0
+var cannon_shots := 0
+var bosses_spawned := 0
+var tick_pushes := 0
+var _fx: Node3D
+var _meshes: Dictionary = {}
+var _rings: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -53,6 +74,9 @@ func _ready() -> void:
 	_enemies = Node3D.new()
 	_enemies.name = "Enemies"
 	add_child(_enemies)
+	_fx = Node3D.new()
+	_fx.name = "Fx"
+	add_child(_fx)
 	_build_pool()
 
 
@@ -74,6 +98,14 @@ func start_run(is_tutorial: bool) -> void:
 	_wave_time = 0.0
 	_wind_cd = 6.0
 	_wind_left = 0.0
+	_card_left = 0.0
+	_card_pending = not is_tutorial
+	_clear_left = 0.0
+	_clear_sent = false
+	_hitstop = 0.0
+	_awaiting_choice = false
+	_boss = null
+	_script.clear()
 	queue.clear()
 	running = true
 	GameState.runs += 1
@@ -98,6 +130,8 @@ func start_run(is_tutorial: bool) -> void:
 			queue[0].epic = true
 	_sync_ghost()
 	_place_camera(true)
+	if not is_tutorial:
+		_arm_wave()
 
 
 func request_drop() -> bool:
@@ -159,15 +193,25 @@ func _physics_process(delta: float) -> void:
 	if not running or tower == null:
 		return
 	tower.tutorial = _tutorial >= 0
+	if _hitstop > 0.0:
+		_hitstop -= delta
+		_sparks_tick(delta)
+		_camera(delta)
+		return
 	tower.tick(delta, _enemies.get_children())
 	_shoot(tower.shots)
 	_bullets(delta)
 	_sparks_tick(delta)
+	_fx_tick(delta)
 	_enemies_tick(delta)
 	_shake = move_toward(_shake, 0.0, delta * 2.8)
-	if _tutorial < 0 and not chest_open:
+	if _tutorial < 0 and not chest_open and not _awaiting_choice:
 		_waves(delta)
 		_wind(delta)
+	_sync_ghost()
+	var danger := tower.tilt_deg() >= 18.0
+	var combat := _enemies.get_child_count() > 0 and _tutorial < 0
+	AudioDirector.set_mood(combat, danger)
 	_camera(delta)
 	_best_marker()
 	score = tower.height_blocks() * 10 + kills * 5 + balance_hits * 10
@@ -175,24 +219,103 @@ func _physics_process(delta: float) -> void:
 
 func _waves(delta: float) -> void:
 	var duration := 16.0 + float(wave) * 1.2
+	if _clear_left > 0.0:
+		_clear_left -= delta
+		if _clear_left <= 0.0:
+			if wave % 3 == 0:
+				chest_open = true
+				chest_ready.emit()
+			else:
+				_advance_wave()
+		return
+	if _card_left > 0.0:
+		_card_left -= delta
+		return
+	if _card_pending:
+		_announce()
+		return
 	_wave_time += delta
 	_spawn_cd -= delta
-	if _spawn_cd <= 0.0 and _enemies.get_child_count() < 10 and _wave_time < duration:
-		_spawn_random()
-		_spawn_cd = maxf(1.15, 3.55 - float(wave) * 0.18)
-	if _wave_time >= duration and _enemies.get_child_count() == 0:
-		if wave % 3 == 0:
-			chest_open = true
-			chest_ready.emit()
-			_wave_time = 0.0
-		else:
-			_advance_wave()
+	if _spawn_cd <= 0.0 and _enemies.get_child_count() < 10 and _wave_time < duration and not _script.is_empty():
+		var job: Dictionary = _script.pop_front()
+		_spawn(str(job.id), bool(job.elite), bool(job.get("boss", false)))
+		_spawn_cd = maxf(0.85, 2.4 - float(wave) * 0.08)
+	if _wave_time >= duration and _enemies.get_child_count() == 0 and _script.is_empty() and not _clear_sent:
+		_clear_sent = true
+		_clear_left = 1.2
+		var next_name := _next_threat()
+		wave_clear.emit("%s %d   %s %d\n%s" % [Locale.t("height"), tower.height_blocks(), Locale.t("kills"), kills, next_name])
 
 
 func _advance_wave() -> void:
 	wave += 1
 	_wave_time = 0.0
 	_spawn_cd = 1.4
+	_clear_sent = false
+	_arm_wave()
+
+
+func _arm_wave() -> void:
+	_script.clear()
+	_card_pending = true
+	_boss = null
+	if wave % 3 == 0 and wave != _choice_wave:
+		_awaiting_choice = true
+		mutation_ready.emit()
+		return
+	var script := Catalog.wave_script(wave)
+	if script.is_empty() and wave % 5 == 0:
+		script = {"card": "wave_boss", "boss": "02_smash_crab", "groups": [{"id": "01_ram_beetle", "count": 3, "elite": false}]}
+	if script.is_empty():
+		var id := _random_id()
+		_script.append({"id": id, "elite": wave >= 4 and randf() < 0.18, "boss": false})
+		_script.append({"id": id, "elite": false, "boss": false})
+		return
+	if script.has("boss") and _tutorial < 0:
+		_script.append({"id": str(script.boss), "elite": true, "boss": true})
+	for group in script.get("groups", []):
+		var count := int(group.get("count", 1))
+		for _i in count:
+			_script.append({
+				"id": str(group.get("id", "01_ram_beetle")),
+				"elite": bool(group.get("elite", false)),
+				"boss": false,
+			})
+
+
+func apply_mutation(which: int) -> void:
+	_awaiting_choice = false
+	_choice_wave = wave
+	if queue.is_empty():
+		_arm_wave()
+		return
+	if which == 0:
+		queue[0].epic = true
+	elif which == 1 and not queue.is_empty():
+		queue[0].id = "06_shield_slab"
+		queue[0].epic = false
+	else:
+		tower.fire_buff = maxf(tower.fire_buff, 4.0)
+	_sync_ghost()
+	_arm_wave()
+
+
+func _announce() -> void:
+	_card_pending = false
+	_card_left = 1.0
+	card_count += 1
+	var script := Catalog.wave_script(wave)
+	var key := str(script.get("card", "wave_mixed"))
+	if script.is_empty() and wave % 5 == 0:
+		key = "wave_boss"
+	wave_card.emit(Locale.t(key))
+
+
+func _next_threat() -> String:
+	var upcoming := Catalog.wave_script(wave + 1)
+	if upcoming.is_empty():
+		return Locale.t("wave") % (wave + 1)
+	return Locale.t(str(upcoming.get("card", "wave_mixed")))
 
 
 func _wind(delta: float) -> void:
@@ -211,24 +334,29 @@ func _wind(delta: float) -> void:
 		wind_warning.emit(_wind_dir)
 
 
-func _spawn_random() -> void:
+func _random_id() -> String:
 	var pool: Array[String] = []
 	for id in Catalog.creatures().keys():
 		if int(Catalog.creature(id).unlock_wave) <= wave:
 			pool.append(id)
 	if pool.is_empty():
-		pool.append("01_ram_beetle")
-	var elite := wave >= 4 and randf() < 0.18
-	_spawn(pool[randi() % pool.size()], elite)
+		return "01_ram_beetle"
+	return pool[randi() % pool.size()]
 
 
-func _spawn(id: String, elite: bool) -> void:
+func _spawn(id: String, elite: bool, as_boss: bool = false) -> void:
+	if as_boss and (_tutorial >= 0 or tutorial_mode):
+		return
 	var def := Catalog.creature(id)
 	if def.is_empty():
 		return
 	var enemy := Enemy.new()
 	_enemies.add_child(enemy)
-	enemy.setup(def, wave, elite)
+	enemy.setup(def, wave, elite, as_boss)
+	if as_boss:
+		_boss = enemy
+		bosses_spawned += 1
+		boss_changed.emit(1.0)
 	var ang := randf() * TAU
 	var radius := 8.6
 	enemy.position = Vector3(cos(ang) * radius, 0.0, sin(ang) * radius)
@@ -240,7 +368,18 @@ func _on_enemy_died(enemy: Enemy) -> void:
 		kills += 1
 		AudioDirector.play("kill")
 		_burst(enemy.global_position + Vector3(0, 0.45, 0), Color("ffb15a"), 14)
-		_shake = maxf(_shake, 0.18)
+		_shake = maxf(_shake, 0.34 if enemy.boss or enemy.elite else 0.18)
+		if enemy.boss or enemy.elite:
+			_hitstop = 0.03
+		if enemy.death_push > 0.0:
+			tower.apply_hit(enemy.global_position, enemy.death_push, enemy.height_ratio)
+			tick_pushes += 1
+		if enemy.boss:
+			_boss = null
+			boss_changed.emit(0.0)
+			if not chest_open:
+				chest_open = true
+				chest_ready.emit()
 	if _tutorial == 2 and kills >= 1:
 		_finish_tutorial()
 
@@ -256,6 +395,7 @@ func _finish_tutorial() -> void:
 		_sync_ghost()
 	tutorial_step.emit(3)
 	_spawn_cd = 1.6
+	_arm_wave()
 
 
 func _enemies_tick(delta: float) -> void:
@@ -308,6 +448,9 @@ func _sync_ghost() -> void:
 
 func _on_balance() -> void:
 	balance_hits += 1
+	var color := Color("d8ff6a") if tower.perfect_chain > 1 else Color("9cff6a")
+	_burst(Vector3(0, tower.total_height, 0), color, 10 + tower.perfect_chain * 4)
+	_shake = maxf(_shake, 0.16 + float(tower.perfect_chain) * 0.04)
 
 
 func _on_collapsed() -> void:
@@ -315,6 +458,8 @@ func _on_collapsed() -> void:
 		return
 	running = false
 	last_earned = tower.height_blocks() + kills * 2 + balance_hits
+	if GameState.heat:
+		last_earned *= 2
 	GameState.coins += last_earned
 	var height := tower.height_blocks()
 	if height > GameState.best_height:
@@ -329,8 +474,12 @@ func _on_collapsed() -> void:
 
 func _shoot(list: Array[Dictionary]) -> void:
 	for shot in list:
-		if bool(shot.get("beam", false)):
-			_show_beam(shot.from, shot.to)
+		var style := str(shot.get("style", "cannon"))
+		if style == "spike":
+			_pulse(shot.to, Color("e7ff9a"))
+			continue
+		if bool(shot.get("beam", false)) or style == "crystal":
+			_show_beam(shot.from, shot.to, style)
 			continue
 		var node := _take_bullet()
 		if node == null:
@@ -341,17 +490,32 @@ func _shoot(list: Array[Dictionary]) -> void:
 		if dir.length() < 0.05:
 			dir = Vector3(0, 0.2, -1)
 		dir = dir.normalized()
+		node.mesh = _meshes.get(style, _meshes["cannon"])
+		node.material_override = _style_mat(style)
 		node.global_position = origin
 		node.visible = true
-		_burst(origin, Color("ffe08a"), 4)
-		var splash := float(shot.splash)
-		node.scale = Vector3.ONE * (1.7 if splash > 0.0 else 1.0)
+		if style == "cannon":
+			cannon_shots += 1
+			node.scale = Vector3(0.22, 0.22, 0.55)
+			_burst(origin, Color("ffb15a"), 5)
+		elif style == "twin":
+			node.scale = Vector3(0.08, 0.08, 0.35)
+			_burst(origin, Color("fff1c2"), 2)
+		elif style == "missile":
+			node.scale = Vector3(0.16, 0.16, 0.42)
+			dir = (dir + Vector3.UP * 0.55).normalized()
+		elif style == "crown":
+			node.scale = Vector3(0.06, 0.06, 0.7)
+		else:
+			node.scale = Vector3.ONE * 0.2
 		_live.append({
 			"node": node,
 			"vel": dir * float(shot.speed),
 			"damage": float(shot.damage),
-			"splash": splash,
-			"life": 2.2,
+			"splash": float(shot.splash),
+			"life": 2.4,
+			"style": style,
+			"target": dest,
 		})
 
 
@@ -361,7 +525,18 @@ func _bullets(delta: float) -> void:
 		var bullet: Dictionary = _live[i]
 		bullet.life = float(bullet.life) - delta
 		var node: MeshInstance3D = bullet.node
-		node.global_position += (bullet.vel as Vector3) * delta
+		var style := str(bullet.style)
+		var vel: Vector3 = bullet.vel
+		if style == "missile":
+			vel.y -= 7.5 * delta
+		elif style == "crown":
+			var aim: Vector3 = bullet.target - node.global_position
+			if aim.length() > 0.05:
+				vel = vel.lerp(aim.normalized() * vel.length(), 0.18)
+		bullet.vel = vel
+		node.global_position += vel * delta
+		if vel.length() > 0.05:
+			node.look_at(node.global_position + vel, Vector3.UP)
 		var exploded := _touch_bullet(bullet)
 		if exploded or float(bullet.life) <= 0.0 or node.global_position.y < -0.5:
 			node.visible = false
@@ -377,33 +552,120 @@ func _bullets(delta: float) -> void:
 func _touch_bullet(bullet: Dictionary) -> bool:
 	var node: MeshInstance3D = bullet.node
 	var splash := float(bullet.splash)
-	var reach := 0.72 + splash
+	var style := str(bullet.style)
+	var reach := 0.45 if style == "twin" else 0.62
 	for child in _enemies.get_children():
 		if not (child is Enemy) or child.dead:
 			continue
-		if node.global_position.distance_to(child.global_position) <= reach:
+		if node.global_position.distance_to(child.global_position) <= reach + (0.2 if splash > 0.0 else 0.0):
 			if splash > 0.0:
 				for other in _enemies.get_children():
-					if other is Enemy and not other.dead and other.global_position.distance_to(node.global_position) <= splash + 0.4:
-						other.take_damage(float(bullet.damage))
+					if other is Enemy and not other.dead and other.global_position.distance_to(node.global_position) <= splash + 0.45:
+						other.take_damage(float(bullet.damage), splash)
+				_explode(node.global_position, style)
 			else:
-				child.take_damage(float(bullet.damage))
-			_burst(node.global_position, Color("ff7a3c"), 8)
-			_shake = maxf(_shake, 0.08)
+				child.take_damage(float(bullet.damage), 0.0)
+				_burst(node.global_position, _style_color(style), 6)
+			_shake = maxf(_shake, 0.12 if style == "cannon" else 0.06)
 			return true
 	return false
 
 
-func _show_beam(a: Vector3, b: Vector3) -> void:
+func _explode(at: Vector3, style: String) -> void:
+	if style == "missile":
+		missile_bursts += 1
+	var ring := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 0.15
+	torus.outer_radius = 0.42
+	ring.mesh = torus
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = _style_color(style)
+	mat.emission_enabled = true
+	mat.emission = _style_color(style)
+	mat.emission_energy_multiplier = 2.2
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ring.material_override = mat
+	_fx.add_child(ring)
+	ring.global_position = at
+	_rings.append({"node": ring, "life": 0.28})
+	_burst(at, _style_color(style), 12)
+
+
+func _pulse(at: Vector3, color: Color) -> void:
+	var ring := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 0.4
+	torus.outer_radius = 0.7
+	ring.mesh = torus
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring.material_override = mat
+	ring.position = Vector3(at.x, 0.08, at.z)
+	_fx.add_child(ring)
+	_rings.append({"node": ring, "life": 0.22})
+
+
+func _fx_tick(delta: float) -> void:
+	var i := 0
+	while i < _rings.size():
+		var ring: Dictionary = _rings[i]
+		ring.life = float(ring.life) - delta
+		var node: Node3D = ring.node
+		if is_instance_valid(node):
+			node.scale += Vector3.ONE * delta * 8.0
+		if float(ring.life) <= 0.0:
+			if is_instance_valid(node):
+				node.queue_free()
+			_rings.remove_at(i)
+		else:
+			i += 1
+
+
+func _style_color(style: String) -> Color:
+	match style:
+		"twin":
+			return Color("fff4c8")
+		"missile":
+			return Color("ff7a32")
+		"crown":
+			return Color("d9b4ff")
+		"crystal":
+			return Color("9af6ff")
+		"spike":
+			return Color("d6ff78")
+		_:
+			return Color("ffb15a")
+
+
+func _style_mat(style: String) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	var color := _style_color(style)
+	mat.albedo_color = color
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = 1.8
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	return mat
+
+
+func _show_beam(a: Vector3, b: Vector3, style: String = "crystal") -> void:
 	var mid := (a + b) * 0.5
 	_beam.global_position = mid
+	if _beam.material_override is StandardMaterial3D:
+		(_beam.material_override as StandardMaterial3D).albedo_color = _style_color(style)
+		(_beam.material_override as StandardMaterial3D).emission = _style_color(style)
 	_beam.look_at(b, Vector3.UP)
 	_beam.rotate_object_local(Vector3.RIGHT, PI * 0.5)
 	var length := maxf(a.distance_to(b), 0.2)
-	_beam.scale = Vector3(1, length, 1)
+	_beam.scale = Vector3(1.4 if style == "crystal" else 0.4, length, 1.4 if style == "crystal" else 0.4)
 	_beam.visible = true
-	_beam_life = 0.12
-	_burst(b, Color("ffd27a"), 6)
+	_beam_life = 0.22 if style == "crystal" else 0.12
+	_burst(b, _style_color(style), 6)
 
 
 func _camera(delta: float) -> void:
@@ -529,6 +791,18 @@ func _build_pool() -> void:
 	mat.emission_enabled = true
 	mat.emission = Color("ffb15a")
 	mat.emission_energy_multiplier = 2.4
+	var cannon := CapsuleMesh.new()
+	cannon.radius = 0.12
+	cannon.height = 0.46
+	var twin := CapsuleMesh.new()
+	twin.radius = 0.04
+	twin.height = 0.28
+	var missile := CapsuleMesh.new()
+	missile.radius = 0.1
+	missile.height = 0.38
+	var crown := BoxMesh.new()
+	crown.size = Vector3(0.08, 0.08, 0.7)
+	_meshes = {"cannon": cannon, "twin": twin, "missile": missile, "crown": crown}
 	for _i in 28:
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh

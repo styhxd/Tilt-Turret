@@ -30,15 +30,131 @@ func _smoke(world: World) -> void:
 		push_error("creature rig missing")
 		get_tree().quit(3)
 		return
+	if Catalog.creature("06_bloated_tick").get("role", "") != "bomb":
+		push_error("roles missing")
+		get_tree().quit(4)
+		return
+	if Catalog.wave_script(1).is_empty():
+		push_error("wave script missing")
+		get_tree().quit(4)
+		return
 	world.start_run(true)
-	world.add_yaw(0.9)
+	var spins := 0
+	while not world.tower.ghost_good and spins < 8:
+		world.add_yaw(0.4)
+		spins += 1
+	if not world.tower.ghost_good:
+		world.add_yaw(0.9)
+	var before := world.tower.horizontal_com()
+	var ghost := world.tower.ghost_good
 	await get_tree().create_timer(0.15).timeout
-	world.request_drop()
+	if not world.request_drop():
+		world.add_yaw(0.9)
+		world.request_drop()
 	await get_tree().create_timer(1.1).timeout
 	var stack_n := world.tower.stack.size()
 	var tilt := world.tower.tilt_deg()
-	print("SMOKE stack=", stack_n, " tilt=", snappedf(tilt, 0.01), " alive=", world.tower.alive, " tutorial=", world._tutorial)
-	if stack_n < 2 or not world.tower.alive:
+	print("SMOKE stack=", stack_n, " tilt=", snappedf(tilt, 0.01), " alive=", world.tower.alive, " tutorial=", world._tutorial, " ghost=", ghost, " improved=", world.tower.last_improved, " com=", snappedf(before, 0.001), "->", snappedf(world.tower.horizontal_com(), 0.001))
+	if stack_n < 2 or not world.tower.alive or not ghost or not world.tower.last_improved:
 		get_tree().quit(1)
 		return
+	if world.bosses_spawned != 0:
+		push_error("boss during tutorial")
+		get_tree().quit(5)
+		return
+	var saved_splash := GameState.plant_splash
+	GameState.plant_splash = false
+	world.tower.begin(1.0, 1.0, 1.0, false)
+	if world.tower.splash_cannon:
+		get_tree().quit(6)
+		return
+	GameState.plant_splash = true
+	world.tower.begin(1.0, 1.0, 1.0, false)
+	if not world.tower.splash_cannon:
+		get_tree().quit(6)
+		return
+	GameState.plant_splash = saved_splash
+	world._clear_enemies()
+	world._spawn("01_ram_beetle", false)
+	var bug := world._enemies.get_child(world._enemies.get_child_count() - 1)
+	bug.position = Vector3(0, 1.0, 1.2)
+	world.missile_bursts = 0
+	world.cannon_shots = 0
+	world._shoot([{
+		"from": Vector3(0, 1.0, 0),
+		"to": Vector3(0, 1.0, 1.2),
+		"speed": 40.0,
+		"damage": 4.0,
+		"splash": 1.2,
+		"beam": false,
+		"style": "missile",
+	}])
+	for _step in 8:
+		world._bullets(0.02)
+	var missile_fx := world.missile_bursts
+	world._shoot([{
+		"from": Vector3(0, 1.0, 0),
+		"to": Vector3(0, 1.0, 1.2),
+		"speed": 40.0,
+		"damage": 4.0,
+		"splash": 0.0,
+		"beam": false,
+		"style": "cannon",
+	}])
+	for _step in 8:
+		world._bullets(0.02)
+	if missile_fx < 1 or world.missile_bursts != missile_fx:
+		push_error("missile fx")
+		get_tree().quit(7)
+		return
+	var vel_before := world.tower.vel_x
+	world._spawn("06_bloated_tick", false)
+	var tick := world._enemies.get_child(world._enemies.get_child_count() - 1) as Enemy
+	tick.position = Vector3(1.2, 0.4, 0.2)
+	tick.take_damage(9999.0, 0.0)
+	if world.tick_pushes < 1:
+		push_error("tick push")
+		get_tree().quit(8)
+		return
+	world._tutorial = -1
+	world.tutorial_mode = false
+	world.wave = 1
+	while world._enemies.get_child_count() > 0:
+		var leftover := world._enemies.get_child(0)
+		world._enemies.remove_child(leftover)
+		leftover.free()
+	world._card_left = 0.0
+	world._clear_left = 0.0
+	world._awaiting_choice = false
+	world.card_count = 0
+	world._arm_wave()
+	world._waves(0.01)
+	if world.card_count < 1 or world._enemies.get_child_count() != 0:
+		push_error("wave card")
+		get_tree().quit(9)
+		return
+	GameState.music_on = true
+	AudioDirector.set_mood(true, false)
+	AudioDirector._apply_layers()
+	var drive_on := AudioDirector._drive.volume_db > -40.0
+	var bass_on := AudioDirector._music.playing
+	get_tree().paused = true
+	AudioDirector._apply_layers()
+	var drive_paused := AudioDirector._drive.volume_db < -40.0
+	var bass_held := AudioDirector._music.playing
+	get_tree().paused = false
+	AudioDirector._apply_layers()
+	var drive_back := AudioDirector._drive.playing and AudioDirector._drive.volume_db > -40.0
+	print("AUDIO drive=", drive_on, " bass=", bass_on, " paused=", drive_paused, " held=", bass_held, " back=", drive_back, " tick=", world.tick_pushes, " vel=", vel_before)
+	if not drive_on or not bass_on or not drive_paused or not bass_held or not drive_back:
+		get_tree().quit(10)
+		return
+	world.wave = 2
+	world._light_streak = 2
+	var forced: Dictionary = world._roll()
+	if not (str(forced.id) in Catalog.HEAVY_IDS):
+		push_error("light streak")
+		get_tree().quit(11)
+		return
+	print("SMOKE_OK")
 	get_tree().quit(0)

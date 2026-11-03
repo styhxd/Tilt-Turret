@@ -17,6 +17,10 @@ var last_daily: String = ""
 var upgrade_statue: int = 0
 var upgrade_cannon: int = 0
 var upgrade_generator: int = 0
+var plant_splash: bool = false
+var plant_air: bool = false
+var plant_bounce: bool = false
+var heat: bool = false
 var last_interstitial_msec: int = -100000
 var last_rewarded_msec: int = -100000
 
@@ -47,6 +51,53 @@ func multiplier(stat: String) -> float:
 
 func upgrade_cost(level: int) -> int:
 	return 40 + level * 35
+
+
+func plant_cost(id: String) -> int:
+	match id:
+		"splash":
+			return 80
+		"air":
+			return 110
+		"bounce":
+			return 140
+	return 9999
+
+
+func plant_owned(id: String) -> bool:
+	match id:
+		"splash":
+			return plant_splash
+		"air":
+			return plant_air
+		"bounce":
+			return plant_bounce
+	return false
+
+
+func try_buy_plant(id: String) -> bool:
+	if plant_owned(id):
+		return false
+	var cost := plant_cost(id)
+	if coins < cost:
+		return false
+	coins -= cost
+	match id:
+		"splash":
+			plant_splash = true
+		"air":
+			plant_air = true
+		"bounce":
+			plant_bounce = true
+		_:
+			return false
+	save_game()
+	return true
+
+
+func set_heat(on: bool) -> void:
+	heat = on
+	save_game()
 
 
 func try_buy(stat: String) -> bool:
@@ -124,6 +175,10 @@ func load_game() -> void:
 	upgrade_statue = int(cf.get_value("p", "upgrade_statue", 0))
 	upgrade_cannon = int(cf.get_value("p", "upgrade_cannon", 0))
 	upgrade_generator = int(cf.get_value("p", "upgrade_generator", 0))
+	plant_splash = bool(cf.get_value("p", "plant_splash", false))
+	plant_air = bool(cf.get_value("p", "plant_air", false))
+	plant_bounce = bool(cf.get_value("p", "plant_bounce", false))
+	heat = bool(cf.get_value("p", "heat", false))
 
 
 func save_game() -> void:
@@ -142,4 +197,8 @@ func save_game() -> void:
 	cf.set_value("p", "upgrade_statue", upgrade_statue)
 	cf.set_value("p", "upgrade_cannon", upgrade_cannon)
 	cf.set_value("p", "upgrade_generator", upgrade_generator)
+	cf.set_value("p", "plant_splash", plant_splash)
+	cf.set_value("p", "plant_air", plant_air)
+	cf.set_value("p", "plant_bounce", plant_bounce)
+	cf.set_value("p", "heat", heat)
 	cf.save(SAVE_PATH)

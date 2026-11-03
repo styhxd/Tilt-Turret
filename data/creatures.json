@@ -1,8 +1,8 @@
 [
-  {"id": "01_ram_beetle", "hp": 32, "speed": 2.15, "impulse": 1.25, "flying": false, "height_ratio": 0.02, "attack": 0.85, "radius": 1.25, "visual_height": 0.72, "unlock_wave": 1},
-  {"id": "02_smash_crab", "hp": 58, "speed": 1.45, "impulse": 2.35, "flying": false, "height_ratio": 0.02, "attack": 1.05, "radius": 1.35, "visual_height": 0.82, "unlock_wave": 3},
-  {"id": "03_iron_slug", "hp": 84, "speed": 0.95, "impulse": 2.9, "flying": false, "height_ratio": 0.02, "attack": 1.2, "radius": 1.45, "visual_height": 0.55, "unlock_wave": 5},
-  {"id": "04_manta_bat", "hp": 30, "speed": 2.5, "impulse": 1.45, "flying": true, "height_ratio": 0.58, "attack": 1.1, "radius": 1.7, "visual_height": 0.85, "unlock_wave": 4},
-  {"id": "05_sting_wasp", "hp": 16, "speed": 3.7, "impulse": 0.75, "flying": true, "height_ratio": 0.74, "attack": 0.7, "radius": 1.45, "visual_height": 0.62, "unlock_wave": 7},
-  {"id": "06_bloated_tick", "hp": 50, "speed": 1.65, "impulse": 2.15, "flying": true, "height_ratio": 0.42, "attack": 1.25, "radius": 1.8, "visual_height": 0.95, "unlock_wave": 9}
+  {"id": "01_ram_beetle", "hp": 28, "speed": 2.15, "impulse": 1.15, "flying": false, "height_ratio": 0.02, "attack": 0.85, "radius": 1.25, "visual_height": 0.72, "unlock_wave": 1, "role": "swarm", "armor": 1.0, "splash_taken": 1.0, "death_push": 0.0},
+  {"id": "02_smash_crab", "hp": 70, "speed": 1.35, "impulse": 2.35, "flying": false, "height_ratio": 0.02, "attack": 1.05, "radius": 1.35, "visual_height": 0.82, "unlock_wave": 3, "role": "armor", "armor": 0.45, "splash_taken": 1.55, "death_push": 0.0},
+  {"id": "03_iron_slug", "hp": 96, "speed": 0.82, "impulse": 3.1, "flying": false, "height_ratio": 0.02, "attack": 1.25, "radius": 1.45, "visual_height": 0.55, "unlock_wave": 5, "role": "tank", "armor": 0.85, "splash_taken": 0.9, "death_push": 0.0},
+  {"id": "04_manta_bat", "hp": 30, "speed": 2.5, "impulse": 1.45, "flying": true, "height_ratio": 0.58, "attack": 1.1, "radius": 1.7, "visual_height": 0.85, "unlock_wave": 4, "role": "high", "armor": 1.0, "splash_taken": 1.0, "death_push": 0.0},
+  {"id": "05_sting_wasp", "hp": 14, "speed": 3.9, "impulse": 0.7, "flying": true, "height_ratio": 0.74, "attack": 0.62, "radius": 1.45, "visual_height": 0.62, "unlock_wave": 7, "role": "skirmish", "armor": 1.0, "splash_taken": 1.15, "death_push": 0.0},
+  {"id": "06_bloated_tick", "hp": 48, "speed": 1.55, "impulse": 1.6, "flying": true, "height_ratio": 0.42, "attack": 1.25, "radius": 1.8, "visual_height": 0.95, "unlock_wave": 9, "role": "bomb", "armor": 1.0, "splash_taken": 1.2, "death_push": 2.4}
 ]
