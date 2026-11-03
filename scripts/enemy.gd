@@ -20,6 +20,7 @@ var armor := 1.0
 var splash_taken := 1.0
 var death_push := 0.0
 var max_hp := 1.0
+var slow := 1.0
 var _attack := 0.0
 var _angle := 0.0
 var _phase := 0.0
@@ -27,6 +28,10 @@ var _anim: AnimationPlayer
 var _base_scale := Vector3.ONE
 var _hit := 0.0
 var _dying := false
+var _doomed := false
+var _die_in := 0.0
+var _windup := 0.0
+var _mark: MeshInstance3D
 var _visual: Node3D
 var _tint := Color.WHITE
 var _flashed := false
@@ -127,10 +132,11 @@ func take_damage(amount: float, splash: float = 0.0) -> void:
 	hp -= amount * mul
 	_hit = 0.16
 	_flashed = false
-	if hp <= 0.0 and not dead:
-		dead = true
-		_dying = true
-		died.emit()
+	if hp <= 0.0 and not dead and not _doomed:
+		_doomed = true
+		_die_in = 0.34
+		_play("attack")
+		_ground_mark()
 
 
 func tick(dt: float, tower) -> void:
@@ -143,6 +149,14 @@ func tick(dt: float, tower) -> void:
 		return
 	if dead or not tower.alive:
 		return
+	if _doomed and not dead:
+		_die_in -= dt
+		scale = _base_scale * (1.2 + sin(Time.get_ticks_msec() * 0.02) * 0.08)
+		if _die_in <= 0.0:
+			dead = true
+			_dying = true
+			died.emit()
+		return
 	scale = _base_scale * (1.0 + _hit * 1.8)
 	if _visual != null and _hit > 0.08 and not _flashed:
 		_flashed = true
@@ -154,43 +168,86 @@ func tick(dt: float, tower) -> void:
 		_warn.scale = Vector3.ONE * (1.0 + 0.35 * sin(Time.get_ticks_msec() * 0.012))
 	if _bar != null:
 		_bar.scale.x = clampf(hp / maxf(max_hp, 0.01), 0.05, 1.0)
-	_attack -= dt
-	if flying:
-		_tick_fly(dt, tower)
-	else:
-		_tick_ground(dt, tower)
-	rotation.y = atan2(global_position.x, global_position.z)
-
-
-func _tick_ground(dt: float, tower: Tower) -> void:
 	var flat := Vector2(global_position.x, global_position.z)
 	var dist := flat.length()
-	if dist > hit_radius:
-		var dir := -flat / maxf(dist, 0.001)
-		global_position += Vector3(dir.x, 0, dir.y) * speed * dt
-		global_position.y = 0.0
-	elif _attack <= 0.0:
-		_attack = attack_period
-		_play("attack")
-		tower.apply_hit(global_position, impulse, height_ratio)
-
-
-func _tick_fly(dt: float, tower: Tower) -> void:
-	_angle += speed * 0.22 * dt
-	var dist := Vector2(global_position.x, global_position.z).length()
-	var want := hit_radius if dist < 4.2 else 6.4
-	var y := 0.7 + tower.total_height * height_ratio + sin(_phase + _angle) * 0.15
-	var target := Vector3(cos(_angle) * want, y, sin(_angle) * want)
-	var to := target - global_position
-	var step := speed * dt
-	if to.length() > step:
-		global_position += to.normalized() * step
+	var moving := dist > hit_radius
+	if moving:
+		_step_toward(dt, tower)
+		_play("fly" if flying else "move")
 	else:
-		global_position = target
-	if dist <= hit_radius + 0.35 and _attack <= 0.0:
+		_hold_attack(dt, tower)
+	var face := Vector2(-global_position.x, -global_position.z)
+	if face.length() > 0.05:
+		rotation.y = atan2(face.x, face.y)
+	if role == "bomb" and hp < max_hp * 0.45:
+		_ground_mark()
+
+
+func clip_name() -> String:
+	if _anim == null:
+		return ""
+	return String(_anim.current_animation)
+
+
+func _step_toward(dt: float, tower: Tower) -> void:
+	var flat := Vector2(global_position.x, global_position.z)
+	var dist := maxf(flat.length(), 0.001)
+	var dir := -flat / dist
+	var pace := speed * slow
+	if role == "armor":
+		dir = Vector2(dir.x + cos(_phase + Time.get_ticks_msec() * 0.002) * 0.65, dir.y).normalized()
+		pace *= 0.85
+	elif role == "tank":
+		pace *= 0.72
+	elif role == "skirmish":
+		pace *= 1.25
+	global_position += Vector3(dir.x, 0, dir.y) * pace * dt
+	if flying:
+		var y := 0.85 + tower.total_height * height_ratio
+		if role == "skirmish":
+			y += sin(_phase + Time.get_ticks_msec() * 0.01) * 0.12
+		elif role == "high":
+			y += sin(_phase) * 0.2 + 0.35
+		global_position.y = lerpf(global_position.y, y, 1.0 - exp(-6.0 * dt))
+	else:
+		global_position.y = 0.0
+
+
+func _hold_attack(dt: float, tower: Tower) -> void:
+	if flying:
+		global_position.y = 0.85 + tower.total_height * height_ratio + sin(Time.get_ticks_msec() * 0.006) * 0.08
+	if _windup > 0.0:
+		_windup -= dt
+		if _windup <= 0.0:
+			tower.apply_hit(global_position, impulse, height_ratio)
+			_play("idle")
+		return
+	_attack -= dt
+	if _attack <= 0.0:
 		_attack = attack_period
+		_windup = 0.42 if role == "tank" else 0.2
 		_play("attack")
-		tower.apply_hit(global_position, impulse, height_ratio)
+		return
+	if clip_name() != "attack":
+		_play("idle")
+
+
+func _ground_mark() -> void:
+	if _mark != null:
+		return
+	_mark = MeshInstance3D.new()
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.28
+	ring.outer_radius = 0.42
+	_mark.mesh = ring
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color("ff4d3a")
+	mat.emission_enabled = true
+	mat.emission = Color("ff4d3a")
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mark.material_override = mat
+	_mark.position = Vector3(0, 0.05, 0)
+	add_child(_mark)
 
 
 func _play(clip: String) -> void:
@@ -206,4 +263,4 @@ func _play(clip: String) -> void:
 
 func _on_anim_finished(anim_name: StringName) -> void:
 	if anim_name == "attack" and not dead:
-		_play("fly" if flying else "move")
+		_play("idle")

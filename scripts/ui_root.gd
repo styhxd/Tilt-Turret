@@ -45,8 +45,6 @@ var _over_menu: Button
 var _doubled := false
 var _shop_box: VBoxContainer
 var _labels: Array[Label] = []
-var _stage: Node3D
-var _diorama_cam: Camera3D
 var _banner: Label
 var _banner_life := 0.0
 var _choice: Control
@@ -77,8 +75,6 @@ func _connect_world() -> void:
 
 
 func _process(delta: float) -> void:
-	if _stage != null:
-		_stage.rotation.y += delta * 0.55
 	if _toast_life > 0.0:
 		_toast_life -= delta
 		if _toast_life <= 0.0:
@@ -120,7 +116,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _screen != "hud" or world == null or not world.running or get_tree().paused:
 		return
 	if event is InputEventScreenDrag:
-		world.add_yaw(-event.relative.x * 0.0075)
+		world.slide(-event.relative.x)
 
 
 func _build() -> void:
@@ -137,21 +133,20 @@ func _build() -> void:
 	_splash.add_child(splash_title)
 	add_child(_splash)
 
-	_menu = _full(Color("102033"))
-	var menu_box := _column()
-	menu_box.set_anchors_preset(Control.PRESET_CENTER)
-	menu_box.offset_left = -420
-	menu_box.offset_right = 420
-	menu_box.offset_top = -780
-	menu_box.offset_bottom = 780
+	_menu = Control.new()
+	_menu.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_menu.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var top := _column()
+	top.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	top.offset_left = -420
+	top.offset_right = 420
+	top.offset_top = 72
+	top.offset_bottom = 420
 	_title = _label("Tilt Turret", 78)
 	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_sub = _label("Stack & Defense", 32)
 	_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_sub.modulate = Color("d6ff3f")
-	menu_box.add_child(_title)
-	menu_box.add_child(_sub)
-	menu_box.add_child(_diorama_frame())
 	_best = _label("", 30)
 	_best.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_coins = _label("", 30)
@@ -159,15 +154,23 @@ func _build() -> void:
 	_daily = _label("", 26)
 	_daily.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_daily.modulate = Color("e7c56a")
+	for node in [_title, _sub, _best, _coins, _daily]:
+		top.add_child(node)
+	_menu.add_child(top)
+	var menu_box := _column()
+	menu_box.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	menu_box.offset_left = -420
+	menu_box.offset_right = 420
+	menu_box.offset_top = -520
+	menu_box.offset_bottom = -36
 	_play = _button("play", _on_play, true)
 	_heat_btn = _button("heat", _toggle_heat, false)
 	_mod_btn = _button("modules", _open_shop, false)
 	_set_btn = _button("settings", _open_settings, false)
-	for node in [_best, _coins, _daily, _play, _heat_btn, _mod_btn, _set_btn]:
+	for node in [_play, _heat_btn, _mod_btn, _set_btn]:
 		menu_box.add_child(node)
 	_menu.add_child(menu_box)
 	add_child(_menu)
-	_populate_diorama()
 
 	_hud = Control.new()
 	_hud.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -296,10 +299,12 @@ func _build_hud() -> void:
 	_queue.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(_queue)
 
-	_tutorial = _label("", 36)
+	_tutorial = _label("", 34)
 	_tutorial.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_tutorial.offset_top = -430
-	_tutorial.offset_bottom = -300
+	_tutorial.offset_left = -480
+	_tutorial.offset_right = 480
+	_tutorial.offset_top = -250
+	_tutorial.offset_bottom = -150
 	_tutorial.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_tutorial.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hud.add_child(_tutorial)
@@ -335,6 +340,13 @@ func _build_hud() -> void:
 	_drop.offset_right = -36
 	_drop.offset_bottom = -36
 	_hud.add_child(_drop)
+	var turn := _button("turn", world.rotate_piece, false)
+	turn.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	turn.offset_left = 36
+	turn.offset_top = -250
+	turn.offset_right = 280
+	turn.offset_bottom = -36
+	_hud.add_child(turn)
 
 
 func _build_settings() -> void:
@@ -428,6 +440,10 @@ func _open_menu() -> void:
 	get_tree().paused = false
 	_refresh_copy()
 	_show("menu")
+	if world:
+		world.show_showcase(true)
+	AudioDirector.start()
+	Ads.boot()
 	Ads.show_banner()
 
 
@@ -697,8 +713,6 @@ func _add_plant(id: String, module_id: String) -> void:
 	var card := PanelContainer.new()
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 16)
-	if DisplayServer.get_name() != "headless":
-		row.add_child(_mini(module_id, false))
 	var text := _label("%s\n%s" % [Locale.t("plant_" + id), Locale.t("plant_" + id + "_fx")], 26)
 	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -744,9 +758,7 @@ func _paint_queue() -> void:
 		if bool(piece.epic):
 			text = Locale.t("epic") + "\n" + text
 		var chip := PanelContainer.new()
-		chip.custom_minimum_size = Vector2(320, 210) if index == 0 else Vector2(200, 150)
-		if DisplayServer.get_name() != "headless":
-			chip.add_child(_mini(id, index == 0))
+		chip.custom_minimum_size = Vector2(280, 110) if index == 0 else Vector2(200, 96)
 		var chip_label := _label(text, 26)
 		chip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		chip_label.add_theme_color_override("font_color", Color("14180f"))
@@ -765,31 +777,6 @@ func _paint_queue() -> void:
 		chip.add_theme_stylebox_override("panel", chip_box)
 		_queue.add_child(chip)
 		index += 1
-
-
-func _mini(id: String, large: bool) -> SubViewportContainer:
-	var box := SubViewportContainer.new()
-	box.custom_minimum_size = Vector2(280, 120) if large else Vector2(120, 90)
-	box.stretch = true
-	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var vp := SubViewport.new()
-	vp.size = Vector2i(280, 140) if large else Vector2i(140, 100)
-	vp.transparent_bg = true
-	vp.own_world_3d = true
-	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	box.add_child(vp)
-	var model := ModelUtil.instantiate("modules", id)
-	vp.add_child(model)
-	ModelUtil.fit(model, 0.9)
-	model.position = Vector3(0, 0, 0)
-	var cam := Camera3D.new()
-	cam.position = Vector3(0.7, 0.85, 2.1)
-	cam.rotation_degrees = Vector3(-18, 18, 0)
-	vp.add_child(cam)
-	var light := DirectionalLight3D.new()
-	light.rotation_degrees = Vector3(-40, 30, 0)
-	vp.add_child(light)
-	return box
 
 
 func _toggle_heat() -> void:
@@ -900,70 +887,6 @@ func _toast_msg(text: String) -> void:
 
 func _chest_body() -> void:
 	pass
-
-
-func _diorama_frame() -> Control:
-	var frame := PanelContainer.new()
-	frame.custom_minimum_size = Vector2(760, 340)
-	var vp := SubViewport.new()
-	vp.size = Vector2i(760, 340)
-	vp.transparent_bg = true
-	vp.own_world_3d = true
-	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	frame.add_child(vp)
-	var root := Node3D.new()
-	vp.add_child(root)
-	var env := WorldEnvironment.new()
-	var world_env := Environment.new()
-	world_env.background_mode = Environment.BG_COLOR
-	world_env.background_color = Color(0.08, 0.16, 0.24, 0)
-	world_env.ambient_light_color = Color("d5e6ff")
-	world_env.ambient_light_energy = 1.3
-	world_env.glow_enabled = true
-	world_env.glow_intensity = 0.4
-	env.environment = world_env
-	root.add_child(env)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-35, 30, 0)
-	sun.light_energy = 1.8
-	root.add_child(sun)
-	_diorama_cam = Camera3D.new()
-	_diorama_cam.position = Vector3(0, 1.25, 3.6)
-	_diorama_cam.fov = 38
-	root.add_child(_diorama_cam)
-	_stage = Node3D.new()
-	root.add_child(_stage)
-	var view := TextureRect.new()
-	view.set_anchors_preset(Control.PRESET_FULL_RECT)
-	view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	view.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	view.texture = vp.get_texture()
-	frame.add_child(view)
-	var plate := StyleBoxFlat.new()
-	plate.bg_color = Color("163044")
-	plate.set_corner_radius_all(28)
-	plate.border_color = Color("d6ff3f")
-	plate.set_border_width_all(4)
-	frame.add_theme_stylebox_override("panel", plate)
-	return frame
-
-
-func _populate_diorama() -> void:
-	if _stage == null or _diorama_cam == null:
-		return
-	var lineup := [
-		["modules", "05_kaiju_bust", 1.25, Vector3(0, 0, 0)],
-		["creatures", "01_ram_beetle", 0.72, Vector3(-1.15, 0, 0.35)],
-		["creatures", "02_smash_crab", 0.78, Vector3(1.15, 0, 0.2)],
-		["creatures", "04_manta_bat", 0.7, Vector3(0.15, 1.15, -0.2)],
-	]
-	for item in lineup:
-		var model := ModelUtil.instantiate(str(item[0]), str(item[1]))
-		_stage.add_child(model)
-		ModelUtil.fit(model, float(item[2]))
-		model.position = item[3]
-	_diorama_cam.look_at(Vector3(0, 0.45, 0))
 
 
 func _full(color: Color) -> ColorRect:

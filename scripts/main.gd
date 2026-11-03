@@ -11,6 +11,8 @@ func _ready() -> void:
 	add_child(ui)
 	if "--smoke" in OS.get_cmdline_user_args():
 		_smoke(world)
+	elif "--shots" in OS.get_cmdline_user_args():
+		_shots(world, ui)
 
 
 func _smoke(world: World) -> void:
@@ -39,14 +41,21 @@ func _smoke(world: World) -> void:
 		get_tree().quit(4)
 		return
 	world.start_run(true)
-	var spins := 0
-	while not world.tower.ghost_good and spins < 8:
-		world.add_yaw(0.4)
-		spins += 1
-	if not world.tower.ghost_good:
-		world.add_yaw(0.9)
+	world.tower.set_stud(-2)
+	world._sync_ghost()
+	if world.tower.would_improve("05_kaiju_bust"):
+		push_error("bad stud still balances")
+		get_tree().quit(1)
+		return
+	world.tower.set_stud(1)
+	world._sync_ghost()
 	var before := world.tower.horizontal_com()
 	var ghost := world.tower.ghost_good
+	if not ghost or world.tower.preview_offset().length() < 0.2:
+		push_error("counter stud")
+		get_tree().quit(1)
+		return
+	world.slide(0.0)
 	await get_tree().create_timer(0.15).timeout
 	if not world.request_drop():
 		world.add_yaw(0.9)
@@ -55,7 +64,7 @@ func _smoke(world: World) -> void:
 	var stack_n := world.tower.stack.size()
 	var tilt := world.tower.tilt_deg()
 	print("SMOKE stack=", stack_n, " tilt=", snappedf(tilt, 0.01), " alive=", world.tower.alive, " tutorial=", world._tutorial, " ghost=", ghost, " improved=", world.tower.last_improved, " com=", snappedf(before, 0.001), "->", snappedf(world.tower.horizontal_com(), 0.001))
-	if stack_n < 2 or not world.tower.alive or not ghost or not world.tower.last_improved:
+	if stack_n < 2 or not world.tower.alive or not ghost or not world.tower.last_improved or world.tower.last_offset.length() < 0.2:
 		get_tree().quit(1)
 		return
 	if world.bosses_spawned != 0:
@@ -74,9 +83,28 @@ func _smoke(world: World) -> void:
 		get_tree().quit(6)
 		return
 	GameState.plant_splash = saved_splash
+	world.tower._place_now("02_side_cannon", false)
+	var cannon: Dictionary = world.tower.stack.back()
+	var muzzle: Vector3 = world.tower._muzzle(cannon, 0)
+	var mid := Vector3(0, float(cannon.base_y) + float(cannon.height) * 0.5, 0)
+	if muzzle.distance_to(world.tower._lean.global_transform * mid) < 0.2:
+		push_error("muzzle")
+		get_tree().quit(6)
+		return
 	world._clear_enemies()
 	world._spawn("01_ram_beetle", false)
-	var bug := world._enemies.get_child(world._enemies.get_child_count() - 1)
+	var spawned := world._enemies.get_child(world._enemies.get_child_count() - 1) as Enemy
+	if spawned.position.z > -4.0:
+		push_error("spawn facing")
+		get_tree().quit(7)
+		return
+	spawned.position = Vector3(0, 0, -1.0)
+	spawned.tick(0.05, world.tower)
+	if spawned.clip_name() == "move":
+		push_error("idle clip")
+		get_tree().quit(7)
+		return
+	var bug := spawned
 	bug.position = Vector3(0, 1.0, 1.2)
 	world.missile_bursts = 0
 	world.cannon_shots = 0
@@ -112,6 +140,8 @@ func _smoke(world: World) -> void:
 	var tick := world._enemies.get_child(world._enemies.get_child_count() - 1) as Enemy
 	tick.position = Vector3(1.2, 0.4, 0.2)
 	tick.take_damage(9999.0, 0.0)
+	for _step in 12:
+		tick.tick(0.05, world.tower)
 	if world.tick_pushes < 1:
 		push_error("tick push")
 		get_tree().quit(8)
@@ -134,6 +164,7 @@ func _smoke(world: World) -> void:
 		get_tree().quit(9)
 		return
 	GameState.music_on = true
+	AudioDirector.start()
 	AudioDirector.set_mood(true, false)
 	AudioDirector._apply_layers()
 	var drive_on := AudioDirector._drive.volume_db > -40.0
@@ -158,3 +189,33 @@ func _smoke(world: World) -> void:
 		return
 	print("SMOKE_OK")
 	get_tree().quit(0)
+
+
+func _shots(world: World, ui: UiRoot) -> void:
+	await get_tree().create_timer(0.6).timeout
+	_grab("menu")
+	ui._start(true)
+	world.tower.set_stud(1)
+	world._sync_ghost()
+	world.slide(0.0)
+	await get_tree().create_timer(0.45).timeout
+	_grab("stud")
+	world._tutorial = -1
+	ui._tutorial.visible = false
+	world._spawn("01_ram_beetle", false)
+	if world.tower._ghost:
+		world.tower._ghost.visible = false
+	var bug := world._enemies.get_child(world._enemies.get_child_count() - 1)
+	if bug is Node3D:
+		bug.position = Vector3(0.0, 0.0, -3.1)
+		bug.rotation.y = 0.0
+	await get_tree().create_timer(0.35).timeout
+	_grab("path")
+	get_tree().quit(0)
+
+
+func _grab(name: String) -> void:
+	var img := get_viewport().get_texture().get_image()
+	var path := "res://build/shots"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(path))
+	img.save_png(ProjectSettings.globalize_path(path + "/" + name + ".png"))

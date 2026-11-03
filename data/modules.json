@@ -1,12 +1,12 @@
 [
-  {"id": "01_base_plate", "mass": 8.0, "height": 0.58, "com": [0.18, 0.0, 0.0], "weapon": "none"},
-  {"id": "02_side_cannon", "mass": 3.0, "height": 0.96, "com": [0.34, 0.0, 0.04], "weapon": "cannon"},
-  {"id": "03_twin_guns", "mass": 3.5, "height": 0.96, "com": [0.30, 0.0, -0.06], "weapon": "twin"},
-  {"id": "04_generator", "mass": 2.0, "height": 0.88, "com": [-0.22, 0.0, -0.22], "weapon": "generator"},
-  {"id": "05_kaiju_bust", "mass": 6.0, "height": 1.22, "com": [-0.40, 0.0, 0.02], "weapon": "none"},
-  {"id": "06_shield_slab", "mass": 4.0, "height": 1.15, "com": [0.06, 0.0, 0.36], "weapon": "shield"},
-  {"id": "07_spike_drum", "mass": 3.0, "height": 0.9, "com": [-0.32, 0.0, 0.0], "weapon": "spike"},
-  {"id": "08_missile_rack", "mass": 2.5, "height": 0.94, "com": [0.36, 0.0, 0.02], "weapon": "missile"},
-  {"id": "09_crystal_spur", "mass": 2.0, "height": 1.05, "com": [-0.38, 0.0, 0.04], "weapon": "crystal"},
-  {"id": "10_crown_nest", "mass": 1.5, "height": 0.86, "com": [0.34, 0.0, -0.04], "weapon": "crown"}
+  {"id": "01_base_plate", "mass": 8.0, "height": 0.58, "com": [0.18, 0.0, 0.0], "weapon": "none", "span": 1.15},
+  {"id": "02_side_cannon", "mass": 3.0, "height": 0.96, "com": [0.34, 0.0, 0.04], "weapon": "cannon", "span": 0.48, "muzzle": [0.72, 0.58, 0.06]},
+  {"id": "03_twin_guns", "mass": 3.5, "height": 0.96, "com": [0.30, 0.0, -0.06], "weapon": "twin", "span": 0.5, "muzzle": [0.66, 0.56, 0.2], "muzzle2": [0.66, 0.56, -0.2]},
+  {"id": "04_generator", "mass": 2.0, "height": 0.88, "com": [-0.22, 0.0, -0.22], "weapon": "generator", "span": 0.42},
+  {"id": "05_kaiju_bust", "mass": 6.0, "height": 1.22, "com": [-0.40, 0.0, 0.02], "weapon": "none", "span": 0.55},
+  {"id": "06_shield_slab", "mass": 4.0, "height": 1.15, "com": [0.06, 0.0, 0.36], "weapon": "shield", "span": 0.62},
+  {"id": "07_spike_drum", "mass": 3.0, "height": 0.9, "com": [-0.32, 0.0, 0.0], "weapon": "spike", "span": 0.5, "muzzle": [0.0, 0.2, 0.0]},
+  {"id": "08_missile_rack", "mass": 2.5, "height": 0.94, "com": [0.36, 0.0, 0.02], "weapon": "missile", "span": 0.46, "muzzle": [0.7, 0.7, 0.02]},
+  {"id": "09_crystal_spur", "mass": 2.0, "height": 1.05, "com": [-0.38, 0.0, 0.04], "weapon": "crystal", "span": 0.36, "muzzle": [-0.08, 1.02, 0.04]},
+  {"id": "10_crown_nest", "mass": 1.5, "height": 0.86, "com": [0.34, 0.0, -0.04], "weapon": "crown", "span": 0.4, "muzzle": [0.48, 0.62, -0.06]}
 ]

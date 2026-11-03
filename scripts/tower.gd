@@ -5,6 +5,7 @@ signal balance_hit
 signal collapsed
 signal landed
 signal struck
+signal slipped
 
 const FALL_DEG := 28.0
 const DANGER_DEG := 18.0
@@ -12,6 +13,7 @@ const SPRING := 11.0
 const DAMP := 4.4
 const GRAV_GAIN := 1.15
 const INVERT := 0.12
+const STUD := 0.42
 
 var yaw := 0.0
 var tilt_x := 0.0
@@ -39,6 +41,9 @@ var culprit_id := ""
 var splash_cannon := false
 var twin_air := false
 var crystal_bounce := false
+var stud := 0
+var face := 0
+var last_offset := Vector2.ZERO
 
 var _yaw_pivot: Node3D
 var _lean: Node3D
@@ -51,6 +56,8 @@ var _fall_y := 0.0
 var _fall_vel := 0.0
 var _danger_armed := true
 var _sway := 0.0
+var _stud_marks: Array[MeshInstance3D] = []
+var _junk: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -60,6 +67,7 @@ func _ready() -> void:
 	_lean = Node3D.new()
 	_lean.name = "Lean"
 	_yaw_pivot.add_child(_lean)
+	_build_studs()
 
 
 func begin(run_statue: float, run_cannon: float, run_gen: float, is_tutorial: bool) -> void:
@@ -74,6 +82,9 @@ func begin(run_statue: float, run_cannon: float, run_gen: float, is_tutorial: bo
 	last_improved = false
 	ghost_good = false
 	culprit_id = ""
+	stud = 0
+	face = 0
+	last_offset = Vector2.ZERO
 	_clear()
 	alive = true
 	collapsing = false
@@ -94,8 +105,25 @@ func begin(run_statue: float, run_cannon: float, run_gen: float, is_tutorial: bo
 func add_yaw(delta: float) -> void:
 	if not alive:
 		return
-	yaw += delta
-	_apply_visual()
+	nudge_stud(1 if delta > 0.0 else -1)
+
+
+func set_stud(index: int) -> void:
+	stud = clampi(index, -2, 2)
+	_refresh_ghost_pose()
+
+
+func nudge_stud(step: int) -> void:
+	if not alive or falling:
+		return
+	set_stud(stud + step)
+
+
+func rotate_piece() -> void:
+	if not alive or falling:
+		return
+	face = (face + 1) % 4
+	_refresh_ghost_pose()
 
 
 func tilt_deg() -> float:
@@ -122,7 +150,9 @@ func drop(id: String, epic: bool) -> bool:
 	_yaw_pivot.add_child(_fall)
 	var def := Catalog.module(id)
 	ModelUtil.fit(_fall, float(def.get("height", 0.9)))
-	_fall.position = Vector3(0, _fall_y, 0)
+	var spot := preview_offset()
+	_fall.position = Vector3(spot.x, _fall_y, spot.y)
+	_fall.rotation.y = face * PI * 0.5
 	AudioDirector.play("drop")
 	AudioDirector.buzz(18)
 	return true
@@ -138,12 +168,8 @@ func show_ghost(id: String) -> void:
 		return
 	var good := would_improve(id)
 	if id == _ghost_id and _ghost != null:
-		_ghost.position.y = total_height
-		if good != ghost_good:
-			ghost_good = good
-			ModelUtil.ghost(_ghost, ghost_good)
-		else:
-			ghost_good = good
+		ghost_good = good and supported_here()
+		_refresh_ghost_pose()
 		return
 	_ghost_id = id
 	ghost_good = good
@@ -154,8 +180,9 @@ func show_ghost(id: String) -> void:
 	_lean.add_child(_ghost)
 	var def := Catalog.module(id)
 	ModelUtil.fit(_ghost, float(def.get("height", 0.9)))
+	ghost_good = good and supported_here()
 	ModelUtil.ghost(_ghost, ghost_good)
-	_ghost.position = Vector3(0, total_height, 0)
+	_refresh_ghost_pose()
 
 
 func freeze() -> void:
@@ -184,8 +211,9 @@ func revive() -> void:
 	var y := 0.0
 	for item in stack:
 		var node: Node3D = item.node
-		node.position = Vector3(0, y, 0)
-		node.rotation = Vector3.ZERO
+		var spot: Vector2 = item.get("offset", Vector2.ZERO)
+		node.position = Vector3(spot.x, y, spot.y)
+		node.rotation = Vector3(0, int(item.get("face", 0)) * PI * 0.5, 0)
 		y += float(item.height)
 	total_height = y
 	_apply_visual()
@@ -207,8 +235,8 @@ func tick(dt: float, enemies: Array) -> void:
 	if alive:
 		_tick_weapons(dt, enemies)
 		_tick_danger()
-	if _ghost != null:
-		_ghost.position.y = total_height
+	_tick_junk(dt)
+	_refresh_ghost_pose()
 	_apply_visual()
 
 
@@ -221,7 +249,8 @@ func _tick_fall(dt: float) -> void:
 	if _fall_y <= top:
 		_lock_fall()
 	else:
-		_fall.position.y = _fall_y
+		var spot := preview_offset()
+		_fall.position = Vector3(spot.x, _fall_y, spot.y)
 
 
 func _lock_fall() -> void:
@@ -235,9 +264,17 @@ func _lock_fall() -> void:
 		mass *= 1.4
 		dmg_mult = 1.5
 	var height := float(def.get("height", 0.9))
+	var spot := preview_offset()
+	last_offset = spot
 	_fall.reparent(_lean, false)
-	_fall.position = Vector3(0, total_height, 0)
-	_fall.rotation = Vector3.ZERO
+	_fall.position = Vector3(spot.x, total_height, spot.y)
+	_fall.rotation = Vector3(0, face * PI * 0.5, 0)
+	if not supported_here():
+		_junk.append({"node": _fall, "vel": Vector3(signf(spot.x) * 2.4, 2.2, 1.1)})
+		falling = false
+		_fall = null
+		slipped.emit()
+		return
 	stack.append({
 		"id": _fall_id,
 		"mass": mass,
@@ -248,6 +285,9 @@ func _lock_fall() -> void:
 		"cd": 0.35,
 		"node": _fall,
 		"base_y": total_height,
+		"offset": spot,
+		"face": face,
+		"span": float(def.get("span", 0.5)),
 	})
 	_decorate(stack[stack.size() - 1])
 	total_height += height
@@ -336,15 +376,11 @@ func _tick_weapons(dt: float, enemies: Array) -> void:
 	var balance_mult := 0.55 + balance * 0.9
 	if fire_buff > 0.0:
 		balance_mult *= 1.35
-	var generators := 0
-	for item in stack:
-		if str(item.weapon) == "generator":
-			generators += 1
-	var rate := balance_mult * (1.0 + float(generators) * 0.28 * gen_mult)
 	for item in stack:
 		var spec: Dictionary = Catalog.WEAPONS.get(str(item.weapon), {})
 		if spec.is_empty():
 			continue
+		var rate := balance_mult * (1.0 + float(_touching_generators(item)) * 0.28 * gen_mult)
 		item.cd = float(item.cd) - dt * rate
 		if float(item.cd) > 0.0:
 			continue
@@ -379,7 +415,7 @@ func _bullet(item: Dictionary, enemies: Array, spec: Dictionary, balance_mult: f
 		if pellets == 1:
 			spread = 0.0
 		shots.append({
-			"from": _muzzle(item),
+			"from": _muzzle(item, i),
 			"to": target.global_position + Vector3(spread, 0.35, spread),
 			"speed": float(spec.speed),
 			"damage": float(spec.dmg) * cannon_mult * float(item.damage_mult) * balance_mult,
@@ -403,7 +439,7 @@ func _beam(item: Dictionary, enemies: Array, damage: float, range: float) -> voi
 			bounce.take_damage(damage * 0.65, 0.0)
 			end = bounce.global_position
 	shots.append({
-		"from": _muzzle(item),
+		"from": _muzzle(item, 0),
 		"to": end,
 		"speed": 0.0,
 		"damage": 0.0,
@@ -423,10 +459,11 @@ func _aura(item: Dictionary, enemies: Array, damage: float, range: float) -> voi
 		var p: Vector3 = node.global_position
 		if p.y < y0 - 0.5 or p.y > y1 + 0.8:
 			continue
-		if Vector2(p.x, p.z).length() <= range:
+		var origin: Vector2 = item.get("offset", Vector2.ZERO)
+		if Vector2(p.x, p.z).distance_to(origin) <= range:
 			node.take_damage(damage, 0.0)
 			shots.append({
-				"from": _muzzle(item),
+				"from": _muzzle(item, 0),
 				"to": p,
 				"speed": 0.0,
 				"damage": 0.0,
@@ -496,6 +533,9 @@ func _place_now(id: String, epic: bool) -> void:
 		"cd": 0.4,
 		"node": node,
 		"base_y": total_height,
+		"offset": Vector2.ZERO,
+		"face": 0,
+		"span": float(def.get("span", 1.15)),
 	})
 	_decorate(stack[stack.size() - 1])
 	total_height += height
@@ -549,7 +589,7 @@ func _com() -> Vector3:
 	var acc := Vector3.ZERO
 	var mass := 0.0
 	for item in stack:
-		var center := Vector3(float(item.com.x), float(item.base_y) + float(item.height) * 0.5, float(item.com.z))
+		var center := _item_center(item)
 		acc += center * float(item.mass)
 		mass += float(item.mass)
 	if mass <= 0.001:
@@ -574,11 +614,14 @@ func _world_xz(local_xz: Vector2) -> Vector2:
 
 func _shield_mul(hit_dir: Vector2) -> float:
 	var factor := 1.0
-	var face := Vector2(sin(yaw), cos(yaw))
-	if face.dot(hit_dir) > 0.35:
-		for item in stack:
-			if str(item.weapon) == "shield":
-				factor *= 0.55
+	for item in stack:
+		if str(item.weapon) != "shield":
+			continue
+		var aim := _item_xz(item)
+		if aim.length() < 0.08:
+			aim = _rotate_flat(Vector2(0, 1), int(item.get("face", 0)))
+		if aim.normalized().dot(hit_dir) > 0.15:
+			factor *= 0.55
 	return factor
 
 
@@ -614,11 +657,14 @@ func would_improve(id: String) -> bool:
 		mass *= statue_mult
 	var height := float(def.get("height", 0.9))
 	var com := Catalog.com_of(def)
-	var center := Vector3(float(com.x), total_height + height * 0.5, float(com.z))
+	var placed := _rotate_flat(Vector2(com.x, com.z), face) + preview_offset()
+	var center := Vector3(placed.x, total_height + height * 0.5, placed.y)
+	if not supported_here():
+		return false
 	var acc := Vector3.ZERO
 	var total := 0.0
 	for item in stack:
-		var c := Vector3(float(item.com.x), float(item.base_y) + float(item.height) * 0.5, float(item.com.z))
+		var c := _item_center(item)
 		acc += c * float(item.mass)
 		total += float(item.mass)
 	acc += center * mass
@@ -634,20 +680,138 @@ func _worst_piece() -> String:
 	var worst := ""
 	var worst_pull := -1.0
 	for item in stack:
-		var pull := _world_xz(Vector2(float(item.com.x), float(item.com.z))).length() * float(item.mass)
+		var pull := _item_xz(item).length() * float(item.mass)
 		if pull > worst_pull and str(item.id) != "01_base_plate":
 			worst_pull = pull
 			worst = str(item.id)
 	return worst
 
 
-func _muzzle(item: Dictionary) -> Vector3:
-	var local := Vector3(float(item.com.x), float(item.base_y) + float(item.height) * 0.62, float(item.com.z))
-	return _lean.global_transform * local
+func _muzzle(item: Dictionary, which: int = 0) -> Vector3:
+	var def := Catalog.module(str(item.id))
+	var key := "muzzle2" if which == 1 and def.has("muzzle2") else "muzzle"
+	var raw = def.get(key, null)
+	var local := Vector3(float(item.com.x), float(item.height) * 0.62, float(item.com.z))
+	if raw is Array and raw.size() >= 3:
+		local = Vector3(float(raw[0]), float(raw[1]), float(raw[2]))
+	var flat := _rotate_flat(Vector2(local.x, local.z), int(item.get("face", 0)))
+	var spot: Vector2 = item.get("offset", Vector2.ZERO)
+	var point := Vector3(flat.x + spot.x, float(item.base_y) + local.y, flat.y + spot.y)
+	return _lean.global_transform * point
 
 
 func _top_world() -> float:
 	return total_height * cos(Vector2(tilt_x, tilt_z).length())
+
+
+func preview_offset() -> Vector2:
+	var base := Vector2.ZERO
+	if not stack.is_empty():
+		base = stack.back().get("offset", Vector2.ZERO)
+	return base + Vector2(float(stud) * STUD, 0.0)
+
+
+func supported_here() -> bool:
+	if stack.is_empty():
+		return true
+	var top: Dictionary = stack.back()
+	var delta: Vector2 = preview_offset() - Vector2(top.get("offset", Vector2.ZERO))
+	return delta.length() <= float(top.get("span", 0.5)) + 0.02
+
+
+func _rotate_flat(v: Vector2, quarter: int) -> Vector2:
+	var ang := float(quarter) * PI * 0.5
+	var c := cos(ang)
+	var s := sin(ang)
+	return Vector2(v.x * c - v.y * s, v.x * s + v.y * c)
+
+
+func _item_xz(item: Dictionary) -> Vector2:
+	var com: Vector3 = item.com
+	return _rotate_flat(Vector2(com.x, com.z), int(item.get("face", 0))) + Vector2(item.get("offset", Vector2.ZERO))
+
+
+func _item_center(item: Dictionary) -> Vector3:
+	var flat := _item_xz(item)
+	return Vector3(flat.x, float(item.base_y) + float(item.height) * 0.5, flat.y)
+
+
+func _touching_generators(item: Dictionary) -> int:
+	var count := 0
+	var here := Vector2(item.get("offset", Vector2.ZERO))
+	for other in stack:
+		if other == item or str(other.weapon) != "generator":
+			continue
+		var there := Vector2(other.get("offset", Vector2.ZERO))
+		if here.distance_to(there) <= STUD * 1.45:
+			count += 1
+	return count
+
+
+func _refresh_ghost_pose() -> void:
+	_place_studs()
+	if _ghost == null:
+		return
+	var spot := preview_offset()
+	_ghost.position = Vector3(spot.x, total_height, spot.y)
+	_ghost.rotation.y = float(face) * PI * 0.5
+	if _ghost_id == "":
+		return
+	var good := would_improve(_ghost_id)
+	if good != ghost_good:
+		ghost_good = good
+		ModelUtil.ghost(_ghost, ghost_good)
+
+
+func _build_studs() -> void:
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 0.07
+	mesh.bottom_radius = 0.09
+	mesh.height = 0.08
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color("f2e2a0")
+	mat.emission_enabled = true
+	mat.emission = Color("ffe08a")
+	mat.emission_energy_multiplier = 0.4
+	for _i in 5:
+		var mark := MeshInstance3D.new()
+		mark.mesh = mesh
+		mark.material_override = mat
+		mark.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_lean.add_child(mark)
+		_stud_marks.append(mark)
+
+
+func _place_studs() -> void:
+	if _stud_marks.is_empty() or stack.is_empty():
+		return
+	var top: Dictionary = stack.back()
+	var origin: Vector2 = top.get("offset", Vector2.ZERO)
+	var y := total_height + 0.04
+	for i in _stud_marks.size():
+		var x := origin.x + float(i - 2) * STUD
+		_stud_marks[i].position = Vector3(x, y, origin.y)
+		_stud_marks[i].visible = alive and not falling
+
+
+func _tick_junk(dt: float) -> void:
+	var i := 0
+	while i < _junk.size():
+		var bit: Dictionary = _junk[i]
+		var node: Node3D = bit.node
+		if not is_instance_valid(node):
+			_junk.remove_at(i)
+			continue
+		var vel: Vector3 = bit.vel
+		vel.y -= 12.0 * dt
+		bit.vel = vel
+		node.position += vel * dt
+		node.rotate_z(4.0 * dt)
+		if node.position.y < -1.2:
+			node.queue_free()
+			_junk.remove_at(i)
+		else:
+			i += 1
 
 
 func _apply_visual() -> void:

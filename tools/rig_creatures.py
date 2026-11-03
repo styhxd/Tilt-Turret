@@ -205,33 +205,58 @@ def skin_weights(points, bones):
     return joints, weights
 
 
-def clip_rotation(bone, t, clip):
+def clip_rotation(bone, t, clip, kind):
     phase = bone["phase"] * math.tau
     swing = bone["swing"]
     role = bone["role"]
     w = t * math.tau
+    gait = 2.0
+    if kind == "02_smash_crab":
+        gait = 1.4
+    elif kind == "03_iron_slug":
+        gait = 1.0
+    elif kind == "05_sting_wasp":
+        gait = 4.0
+    elif kind == "06_bloated_tick":
+        gait = 1.3
     if clip == "idle":
-        amp = 0.08 * swing
+        amp = 0.06 * swing
         if role == "wing":
-            amp = 0.18
-        if role in ("leg", "claw"):
-            amp = 0.12 * swing
-        ang = math.sin(w + phase) * amp
+            amp = 0.35 if kind == "05_sting_wasp" else 0.16
+        ang = math.sin(w * (3.0 if role == "wing" else 1.0) + phase) * amp
     elif clip == "attack":
-        ang = math.sin(w * 2.0) * (0.55 if role in ("claw", "head", "leg") else 0.2) * swing
+        wind = 1.0 if t > 0.45 else t / 0.45
+        ang = wind * (0.9 if role in ("claw", "head", "leg") else 0.35) * swing
     else:
-        ang = math.sin(w * 2.0 + phase) * (0.55 if role in ("leg", "claw", "slug") else 0.22) * swing
+        ang = math.sin(w * gait + phase) * (1.05 if role in ("leg", "claw") else 0.28) * swing
         if role == "wing":
-            ang = math.sin(w * 6.0 + phase) * 0.7 * swing
-    side = -1.0 if "L" in bone["name"] or bone["name"].startswith("hip_-") or bone["name"].startswith("knee_-") or bone["name"].startswith("foot_-") else 1.0
+            ang = math.sin(w * (8.0 if kind == "05_sting_wasp" else 3.2) + phase) * 1.15 * swing
+        if role == "slug":
+            ang = math.sin(w * gait + phase) * 0.7 * swing
+        if kind == "02_smash_crab" and role == "leg":
+            ang *= 0.55
+    side = -1.0 if "L" in bone["name"] or "_-1" in bone["name"] or bone["name"].startswith("hip_-") or bone["name"].startswith("knee_-") or bone["name"].startswith("foot_-") else 1.0
     if role == "wing":
         return quat_norm(quat_axis((0.0, 0.0, side), ang))
     if role in ("leg", "claw"):
-        lift = abs(math.sin(w * 2.0 + phase)) * 0.35 * swing
-        return quat_norm(quat_mul(quat_axis((0.0, 1.0, 0.0), ang * side), quat_axis((0.0, 0.0, side), lift)))
+        lift = max(0.0, math.sin(w * gait + phase)) * (0.85 if kind != "06_bloated_tick" else 0.35) * swing
+        yaw = ang * side * (1.3 if kind == "02_smash_crab" else 0.35)
+        return quat_norm(quat_mul(quat_axis((0.0, 1.0, 0.0), yaw), quat_axis((1.0, 0.0, 0.0), lift * side)))
     if role == "slug":
-        return quat_norm(quat_axis((0.0, 1.0, 0.0), ang))
-    return quat_norm(quat_axis((1.0, 0.0, 0.0), ang * 0.45))
+        return quat_norm(quat_axis((1.0, 0.0, 0.0), ang))
+    return quat_norm(quat_axis((1.0, 0.0, 0.0), ang * 0.35))
+
+
+def clip_translation(bone, t, clip, kind):
+    base = bone["local"]
+    if bone["parent"] >= 0:
+        return base
+    bob = 0.0
+    if clip == "move":
+        bob = abs(math.sin(t * math.tau * 2.0)) * (0.16 if kind == "01_ram_beetle" else 0.07)
+    elif clip == "attack" and t > 0.45:
+        bob = -0.04
+    return (base[0], base[1] + bob, base[2])
 
 
 def align(blob):
@@ -287,6 +312,9 @@ def build(kind, path):
     ibm_view = add_view(js, blob, ibm)
     ibm_acc = add_accessor(js, ibm_view, len(bones), 5126, "MAT4")
 
+    js["nodes"] = []
+    js.pop("skins", None)
+    js.pop("animations", None)
     mesh_node = len(js["nodes"])
     js["nodes"].append({"name": "Body", "mesh": 0, "skin": 0})
     joint_nodes = []
@@ -305,7 +333,7 @@ def build(kind, path):
     js["scenes"] = [{"nodes": [root_index]}]
     js["scene"] = 0
 
-    times = [i / 8.0 for i in range(9)]
+    times = [i / 12.0 for i in range(13)]
     time_bytes = struct.pack("<%df" % len(times), *times)
     time_view = add_view(js, blob, time_bytes)
     time_acc = add_accessor(js, time_view, len(times), 5126, "SCALAR", {"min": [times[0]], "max": [times[-1]]})
@@ -314,9 +342,7 @@ def build(kind, path):
         channels = []
         samplers = []
         for i, b in enumerate(bones):
-            keys = [clip_rotation(b, t, "move" if clip == "move" else clip) for t in times]
-            if clip == "move" and b["role"] == "wing":
-                keys = [clip_rotation(b, t, "move") for t in times]
+            keys = [clip_rotation(b, t, clip, kind) for t in times]
             raw = bytearray()
             for q in keys:
                 raw.extend(struct.pack("<ffff", *q))
@@ -324,6 +350,15 @@ def build(kind, path):
             acc = add_accessor(js, view, len(keys), 5126, "VEC4")
             samplers.append({"input": time_acc, "output": acc, "interpolation": "LINEAR"})
             channels.append({"sampler": len(samplers) - 1, "target": {"node": joint_nodes[i], "path": "rotation"}})
+            if b["parent"] < 0:
+                locs = [clip_translation(b, t, clip, kind) for t in times]
+                lraw = bytearray()
+                for p in locs:
+                    lraw.extend(struct.pack("<fff", *p))
+                lview = add_view(js, blob, lraw)
+                lacc = add_accessor(js, lview, len(locs), 5126, "VEC3")
+                samplers.append({"input": time_acc, "output": lacc, "interpolation": "LINEAR"})
+                channels.append({"sampler": len(samplers) - 1, "target": {"node": joint_nodes[i], "path": "translation"}})
         animations.append({"name": clip, "channels": channels, "samplers": samplers})
     if kind in ("04_manta_bat", "05_sting_wasp", "06_bloated_tick"):
         move = animations[1]

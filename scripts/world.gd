@@ -35,6 +35,13 @@ var _next_epic := false
 var _pending_daily := false
 var _tutorial := -1
 var _yaw_mark := 0.0
+var _slide_px := 0.0
+var _fires: Array[Dictionary] = []
+var _biome := -1
+var _grass: MultiMeshInstance3D
+var _ground: MeshInstance3D
+var _path_mesh: MeshInstance3D
+var _env: Environment
 var _wind_cd := 7.0
 var _wind_left := 0.0
 var _wind_dir := Vector2.RIGHT
@@ -108,6 +115,8 @@ func start_run(is_tutorial: bool) -> void:
 	_script.clear()
 	queue.clear()
 	running = true
+	if _showcase:
+		_showcase.visible = false
 	GameState.runs += 1
 	GameState.save_game()
 	tower.begin(
@@ -153,10 +162,27 @@ func request_drop() -> bool:
 
 
 func add_yaw(delta: float) -> void:
+	slide(80.0 if delta > 0.0 else -80.0)
+
+
+func slide(pixels: float) -> void:
 	if not running:
 		return
-	tower.add_yaw(delta)
-	if _tutorial == 0 and abs(tower.yaw - _yaw_mark) > 0.5:
+	_slide_px += pixels
+	while absf(_slide_px) >= 46.0:
+		var step := 1 if _slide_px > 0.0 else -1
+		_slide_px -= float(step) * 46.0
+		tower.nudge_stud(step)
+	if _tutorial == 0 and tower.ghost_good:
+		_tutorial = 1
+		tutorial_step.emit(1)
+
+
+func rotate_piece() -> void:
+	if not running:
+		return
+	tower.rotate_piece()
+	if _tutorial == 0 and tower.ghost_good:
 		_tutorial = 1
 		tutorial_step.emit(1)
 
@@ -209,6 +235,10 @@ func _physics_process(delta: float) -> void:
 		_waves(delta)
 		_wind(delta)
 	_sync_ghost()
+	_fires_tick(delta)
+	_push_grass()
+	if running:
+		_apply_biome(wave)
 	var danger := tower.tilt_deg() >= 18.0
 	var combat := _enemies.get_child_count() > 0 and _tutorial < 0
 	AudioDirector.set_mood(combat, danger)
@@ -357,9 +387,8 @@ func _spawn(id: String, elite: bool, as_boss: bool = false) -> void:
 		_boss = enemy
 		bosses_spawned += 1
 		boss_changed.emit(1.0)
-	var ang := randf() * TAU
-	var radius := 8.6
-	enemy.position = Vector3(cos(ang) * radius, 0.0, sin(ang) * radius)
+	var lane := randf_range(-1.35, 1.35)
+	enemy.position = Vector3(lane, 1.15 if enemy.flying else 0.0, -8.6)
 	enemy.died.connect(_on_enemy_died.bind(enemy))
 
 
@@ -402,6 +431,7 @@ func _enemies_tick(delta: float) -> void:
 	var nodes := _enemies.get_children()
 	for node in nodes:
 		if node is Enemy and not node.dead:
+			node.slow = 0.55 if node.role == "swarm" and _in_fire(node.global_position) else 1.0
 			node.tick(delta, tower)
 	for i in nodes.size():
 		if not (nodes[i] is Enemy):
@@ -590,6 +620,8 @@ func _explode(at: Vector3, style: String) -> void:
 	_fx.add_child(ring)
 	ring.global_position = at
 	_rings.append({"node": ring, "life": 0.28})
+	if style == "missile":
+		_fires.append({"at": Vector2(at.x, at.z), "life": 2.0})
 	_burst(at, _style_color(style), 12)
 
 
@@ -690,6 +722,166 @@ func _place_camera(snap: bool, delta: float = 0.016) -> void:
 		_cam.position += Vector3(randf_range(-1, 1), randf_range(-0.6, 0.6), randf_range(-1, 1)) * _shake
 
 
+func _in_fire(at: Vector3) -> bool:
+	var flat := Vector2(at.x, at.z)
+	for bit in _fires:
+		if float(bit.life) > 0.0 and flat.distance_to(bit.at) < 1.35:
+			return true
+	return false
+
+
+func _fires_tick(delta: float) -> void:
+	var i := 0
+	while i < _fires.size():
+		_fires[i].life = float(_fires[i].life) - delta
+		if float(_fires[i].life) <= 0.0:
+			_fires.remove_at(i)
+		else:
+			i += 1
+
+
+func _push_grass() -> void:
+	if _grass == null or not (_grass.material_override is ShaderMaterial):
+		return
+	var mat := _grass.material_override as ShaderMaterial
+	var slots: Array[Vector3] = [Vector3(0, -20, 0), Vector3(0, -20, 0), Vector3(0, -20, 0)]
+	var n := 0
+	if _enemies != null:
+		for node in _enemies.get_children():
+			if n >= 3 or not (node is Enemy) or node.dead:
+				continue
+			slots[n] = node.global_position
+			n += 1
+	mat.set_shader_parameter("enemy_a", slots[0])
+	mat.set_shader_parameter("enemy_b", slots[1])
+	mat.set_shader_parameter("enemy_c", slots[2])
+	if _fires.is_empty():
+		mat.set_shader_parameter("fire_amt", 0.0)
+	else:
+		var bit: Dictionary = _fires[0]
+		mat.set_shader_parameter("fire_at", Vector3(bit.at.x, 0.0, bit.at.y))
+		mat.set_shader_parameter("fire_amt", clampf(float(bit.life) / 2.0, 0.0, 1.0))
+
+
+func _apply_biome(wave_n: int) -> void:
+	var index := 0
+	if wave_n >= 10:
+		index = 2
+	elif wave_n >= 5:
+		index = 1
+	if index == _biome or _env == null or _ground == null:
+		return
+	_biome = index
+	var names := ["meadow", "dusk", "ember"]
+	var skies := [Color("8ec6ea"), Color("d27a62"), Color("2a140f")]
+	var fogs := [Color("c5e4f6"), Color("e7b090"), Color("4a2418")]
+	var suns := [Color("fff2d8"), Color("ffb07a"), Color("ff7a3c")]
+	var tints := [Color("6ea84a"), Color("8a6a3a"), Color("6a4030")]
+	var tex := load("res://assets/textures/%s.jpg" % names[index])
+	var sky := load("res://assets/textures/sky_%s.jpg" % names[index])
+	var mat := _ground.material_override as StandardMaterial3D
+	if mat == null:
+		mat = StandardMaterial3D.new()
+		_ground.material_override = mat
+	mat.albedo_color = tints[index]
+	mat.emission_enabled = index == 2
+	mat.emission = Color("ff5a20")
+	mat.emission_energy_multiplier = 0.25 if index == 2 else 0.0
+	if tex is Texture2D:
+		mat.albedo_texture = tex
+		mat.uv1_scale = Vector3(6, 6, 6)
+	_env.background_color = skies[index]
+	_env.ambient_light_color = skies[index].lightened(0.2)
+	_env.fog_light_color = fogs[index]
+	if sky is Texture2D:
+		var panorama := PanoramaSkyMaterial.new()
+		panorama.panorama = sky
+		panorama.energy_multiplier = 1.35 if index == 0 else 1.05
+		var sky_res := Sky.new()
+		sky_res.sky_material = panorama
+		_env.background_mode = Environment.BG_SKY
+		_env.sky = sky_res
+	else:
+		_env.background_mode = Environment.BG_COLOR
+	if _grass != null and _grass.material_override is ShaderMaterial:
+		(_grass.material_override as ShaderMaterial).set_shader_parameter("albedo_tint", Vector3(tints[index].r, tints[index].g, tints[index].b))
+	for child in get_children():
+		if child is DirectionalLight3D and child.light_energy > 1.0:
+			child.light_color = suns[index]
+
+
+func _build_path() -> void:
+	_path_mesh = MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(2.8, 0.04, 10.5)
+	_path_mesh.mesh = box
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color("8a6840")
+	mat.roughness = 1.0
+	var dirt := load("res://assets/textures/dusk.jpg")
+	if dirt is Texture2D:
+		mat.albedo_texture = dirt
+		mat.uv1_scale = Vector3(1.5, 4.0, 1.0)
+	_path_mesh.material_override = mat
+	_path_mesh.position = Vector3(0, 0.02, -4.6)
+	add_child(_path_mesh)
+
+
+func _build_grass() -> void:
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.045, 0.38)
+	quad.orientation = PlaneMesh.FACE_Z
+	var multi := MultiMesh.new()
+	multi.transform_format = MultiMesh.TRANSFORM_3D
+	multi.use_colors = false
+	multi.mesh = quad
+	multi.instance_count = 220
+	var i := 0
+	while i < 220:
+		var x := randf_range(-7.5, 7.5)
+		var z := randf_range(-8.5, 6.5)
+		if absf(x) < 1.5 and z < -0.4 and z > -8.2:
+			x = 1.7 if x >= 0.0 else -1.7
+		var xf := Transform3D(Basis(Vector3.UP, randf() * TAU), Vector3(x, 0.19, z))
+		multi.set_instance_transform(i, xf)
+		i += 1
+	_grass = MultiMeshInstance3D.new()
+	_grass.multimesh = multi
+	_grass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var shader := Shader.new()
+	shader.code = "shader_type spatial;\nrender_mode cull_disabled;\nvarying vec3 tint;\nuniform vec3 enemy_a = vec3(0.0, -20.0, 0.0);\nuniform vec3 enemy_b = vec3(0.0, -20.0, 0.0);\nuniform vec3 enemy_c = vec3(0.0, -20.0, 0.0);\nuniform vec3 fire_at = vec3(0.0, -20.0, 0.0);\nuniform float fire_amt = 0.0;\nuniform vec3 albedo_tint = vec3(0.22, 0.42, 0.16);\nvoid vertex(){\n\tvec3 w = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;\n\tvec3 push = vec3(0.0);\n\tfloat d0 = distance(w, enemy_a);\n\tif (d0 < 1.35) push += normalize(w - enemy_a) * (1.35 - d0);\n\tfloat d1 = distance(w, enemy_b);\n\tif (d1 < 1.35) push += normalize(w - enemy_b) * (1.35 - d1);\n\tfloat d2 = distance(w, enemy_c);\n\tif (d2 < 1.35) push += normalize(w - enemy_c) * (1.35 - d2);\n\tfloat burn = fire_amt * (1.0 - clamp(distance(w, fire_at) / 1.7, 0.0, 1.0));\n\tVERTEX.x += push.x * UV.y * 0.55;\n\tVERTEX.z += push.z * UV.y * 0.55;\n\ttint = mix(albedo_tint, vec3(0.85, 0.28, 0.05), burn);\n}\nvoid fragment(){\n\tALBEDO = tint;\n\tALPHA = mix(0.15, 0.95, UV.y);\n\tEMISSION = vec3(1.0, 0.28, 0.02) * clamp(tint.r - tint.g, 0.0, 1.0);\n}\n"
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	_grass.material_override = mat
+	add_child(_grass)
+
+
+var _showcase: Node3D
+
+
+func show_showcase(on: bool) -> void:
+	if _showcase:
+		_showcase.visible = on and not running
+	if on and _cam:
+		_apply_biome(1)
+		_cam.position = Vector3(0.2, 2.6, 7.4)
+		_cam.look_at(Vector3(0, 1.35, 0.2))
+
+
+func _build_showcase() -> void:
+	_showcase = Node3D.new()
+	add_child(_showcase)
+	var y := 0.0
+	for id in ["01_base_plate", "05_kaiju_bust", "02_side_cannon"]:
+		var def := Catalog.module(id)
+		var node := ModelUtil.instantiate("modules", id)
+		_showcase.add_child(node)
+		var h := float(def.get("height", 0.9))
+		ModelUtil.fit(node, h)
+		node.position = Vector3(0.15 if id != "01_base_plate" else 0.0, y, 0)
+		y += h
+
+
 func _best_marker() -> void:
 	var h := float(GameState.best_height)
 	_best_ring.visible = h >= 2.0
@@ -700,8 +892,9 @@ func _best_marker() -> void:
 func _build_scene() -> void:
 	var env := WorldEnvironment.new()
 	var world_env := Environment.new()
+	_env = world_env
 	world_env.background_mode = Environment.BG_COLOR
-	world_env.background_color = Color("102033")
+	world_env.background_color = Color("8ec6ea")
 	world_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	world_env.ambient_light_color = Color("c5d4ea")
 	world_env.ambient_light_energy = 1.15
@@ -711,8 +904,8 @@ func _build_scene() -> void:
 	world_env.glow_strength = 0.85
 	world_env.glow_bloom = 0.12
 	world_env.fog_enabled = true
-	world_env.fog_light_color = Color("1a3348")
-	world_env.fog_density = 0.008
+	world_env.fog_light_color = Color("c5e4f6")
+	world_env.fog_density = 0.003
 	env.environment = world_env
 	add_child(env)
 
@@ -751,20 +944,11 @@ func _build_scene() -> void:
 	ground.position.y = -0.2
 	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(ground)
-
-	var blob := MeshInstance3D.new()
-	var quad := QuadMesh.new()
-	quad.size = Vector2(3.6, 3.6)
-	blob.mesh = quad
-	var shade := StandardMaterial3D.new()
-	shade.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	shade.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	shade.albedo_color = Color(0, 0, 0, 0.42)
-	blob.material_override = shade
-	blob.rotation.x = -PI * 0.5
-	blob.position.y = 0.015
-	blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(blob)
+	_ground = ground
+	_build_path()
+	_build_grass()
+	_apply_biome(1)
+	_build_showcase()
 
 	_best_ring = MeshInstance3D.new()
 	var ring := TorusMesh.new()

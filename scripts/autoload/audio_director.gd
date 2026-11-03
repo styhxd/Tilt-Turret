@@ -8,10 +8,17 @@ var _high: AudioStreamPlayer
 var _cursor := 0
 var _combat := false
 var _danger := false
+var _started := false
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+
+
+func start() -> void:
+	if _started:
+		return
+	_started = true
 	_sfx["click"] = _tone(620.0, 70, 0.35, 18.0)
 	_sfx["drop"] = _noise(140, 0.45, 10.0)
 	_sfx["shoot"] = _glide(280.0, 140.0, 90, 0.3)
@@ -60,6 +67,8 @@ func _sync_music() -> void:
 
 
 func _apply_layers() -> void:
+	if _music == null or _drive == null or _high == null:
+		return
 	if not GameState.music_on:
 		_music.stop()
 		_drive.stop()
@@ -91,6 +100,8 @@ func set_music(on: bool) -> void:
 
 
 func play(name: String) -> void:
+	if not _started:
+		return
 	if not GameState.sfx_on:
 		return
 	if not _sfx.has(name):
@@ -166,7 +177,7 @@ func _arpeggio() -> AudioStreamWAV:
 
 func _pad() -> AudioStreamWAV:
 	var rate := 22050
-	var n := rate * 2
+	var n := int(rate * 0.5)
 	var data := PackedByteArray()
 	data.resize(n * 2)
 	for i in n:
@@ -183,7 +194,7 @@ func _pad() -> AudioStreamWAV:
 
 func _drive_bed() -> AudioStreamWAV:
 	var rate := 22050
-	var n := rate * 2
+	var n := int(rate * 0.5)
 	var data := PackedByteArray()
 	data.resize(n * 2)
 	for i in n:
@@ -199,7 +210,7 @@ func _drive_bed() -> AudioStreamWAV:
 
 func _high_bed() -> AudioStreamWAV:
 	var rate := 22050
-	var n := rate * 2
+	var n := int(rate * 0.5)
 	var data := PackedByteArray()
 	data.resize(n * 2)
 	for i in n:

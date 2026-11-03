@@ -23,8 +23,18 @@ var _interstitial_load := InterstitialAdLoadCallback.new()
 var _interstitial_content := FullScreenContentCallback.new()
 
 
+var _booted := false
+var _banner_wanted := false
+
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+
+
+func boot() -> void:
+	if _booted:
+		return
+	_booted = true
 	call_deferred("_boot")
 
 
@@ -87,6 +97,8 @@ func _init_sdk() -> void:
 		initialized = true
 		_load_rewarded()
 		_load_interstitial()
+		if _banner_wanted:
+			show_banner()
 	MobileAds.initialize(listener)
 	if not _using_plugin:
 		initialized = true
@@ -98,6 +110,7 @@ func gather_consent(on_done: Callable = Callable()) -> void:
 
 
 func show_banner() -> void:
+	_banner_wanted = true
 	if GameState.ads_removed or not _using_plugin:
 		return
 	if _banner == null:
